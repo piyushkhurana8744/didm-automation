@@ -532,6 +532,7 @@ class AssignmentSettings(BaseModel):
 
 class MyTrainingProfileIn(BaseModel):
     instructions: str = Field(default="", max_length=10_000)
+    variable_values: dict = Field(default_factory=dict)
 
 
 class MyTrainingTextIn(BaseModel):
@@ -1237,7 +1238,8 @@ def build_agents_router() -> APIRouter:
         a, v = ent.agent, ent.version
         out = {"id": a.id, "name": a.name, "description": a.description, "category": a.category,
                "channels": a.channels or [], "version": {"id": v.id, "internal_version": v.internal_version,
-                                                          "published_at": iso(v.published_at)},
+                                                          "published_at": iso(v.published_at),
+                                                          "variable_schema": v.variable_schema or []},
                "access": {"source": ent.source, "expires_at": iso(ent.expires_at),
                           "max_sessions": ent.max_sessions, "max_minutes_per_session": ent.max_minutes_per_session},
                # Phase 2 stores the channels; starting a session arrives in a later phase
@@ -1271,12 +1273,14 @@ def build_agents_router() -> APIRouter:
             TraineeAgentTrainingProfile.agent_id == agent_id)).first()
         if row is None and create:
             row = TraineeAgentTrainingProfile(organization_id=ctx.org.id, user_id=ctx.user.id,
-                                               agent_id=agent_id, instructions="", sources=[])
+                                               agent_id=agent_id, instructions="", variable_values={}, sources=[])
             db.add(row); db.flush()
         return row
 
     def profile_out(row):
-        return {"instructions": row.instructions if row else "", "sources": list(row.sources or []) if row else [],
+        return {"instructions": row.instructions if row else "",
+                "variable_values": dict(row.variable_values or {}) if row else {},
+                "sources": list(row.sources or []) if row else [],
                 "updated_at": iso(row.updated_at) if row else None}
 
     def add_profile_source(row, source: dict):
@@ -1296,7 +1300,15 @@ def build_agents_router() -> APIRouter:
     def update_my_training_profile(agent_id: str, body: MyTrainingProfileIn, request: Request,
                                    ctx: OrgContext = Depends(org_access("training.self")), db: Session = Depends(get_db)):
         row = my_training_profile(db, ctx, agent_id, create=True)
-        row.instructions, row.updated_at = body.instructions.strip(), utcnow()
+        ent = entitlements(db, ctx.org.id, ctx.user.id, agent_id)[0]
+        reserved = {"agent_name", "user_name", "trainee_name", "trainee_training_context", "user_training_context"}
+        if reserved & set(body.variable_values):
+            raise HTTPException(status_code=422, detail="Identity and training-context variables are filled by DIDM.")
+        problems = variables_problems(ent.version.variable_schema or [], body.variable_values, require_all=False)
+        if problems:
+            raise HTTPException(status_code=422, detail=" ".join(problems))
+        row.instructions, row.variable_values, row.updated_at = (body.instructions.strip(),
+                                                                 dict(body.variable_values), utcnow())
         audit(db, request, "trainee.agent_training_updated", actor=ctx.user, organization_id=ctx.org.id,
               target_type="agent", target_id=agent_id, details={"source_count": len(row.sources or [])})
         db.commit()

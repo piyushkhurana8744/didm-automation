@@ -499,6 +499,7 @@ class TraineeAgentTrainingProfile(Base):
     user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
     agent_id = Column(String(36), ForeignKey("agents.id"), nullable=False)
     instructions = Column(Text, nullable=False, default="")
+    variable_values = Column(JSON, nullable=False, default=dict)
     sources = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime, nullable=False, default=utcnow)
     updated_at = Column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)

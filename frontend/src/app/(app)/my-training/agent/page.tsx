@@ -67,7 +67,7 @@ function MyAgentView({ membership, agentId }: { membership: Membership; agentId:
         <StartPractice orgId={orgId} agent={data} />
       </section>
 
-      <PersonalAgentTraining orgId={orgId} agentId={data.id} />
+      <PersonalAgentTraining orgId={orgId} agentId={data.id} variableSchema={data.version.variable_schema ?? []} />
 
       <section aria-labelledby="scenarios-title">
         <h2 id="scenarios-title">Scenarios ({plural(data.scenarios.length, 'scenario')})</h2>

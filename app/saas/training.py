@@ -235,22 +235,25 @@ class TrainingEngine:
                 self._reject(db, org, user, "scenario_not_allowed", agent_id=agent_id)
                 raise TrainingError(404, "scenario_not_allowed", "This scenario is not available to you.")
         schema = ent.version.variable_schema or []
+        schema_names = {v.get("name") for v in schema if isinstance(v, dict)}
         defaults = {v["name"]: v["default"] for v in schema if isinstance(v, dict) and "default" in v}
         variables = {**defaults, **(dict(scenario.agent_variables or {}) if scenario else {})}
-        problems = variables_problems(schema, variables, require_all=True)
-        if problems:
-            raise TrainingError(422, "invalid_variables", "This scenario no longer matches the agent: " + " ".join(problems))
-        # Provider prompts can use {{agent_name}} and either {{user_name}} or
-        # {{trainee_name}}.  These authoritative runtime values deliberately win over any
-        # similarly named scenario variables.  Keep both user aliases while hosted agents
-        # migrate to the canonical user_name variable.
-        user_name = (user.name or "").strip() or user.email.split("@", 1)[0]
-        variables.update({"agent_name": ent.agent.name, "user_name": user_name,
-                          "trainee_name": user_name})
         personal = db.scalars(select(TraineeAgentTrainingProfile).where(
             TraineeAgentTrainingProfile.organization_id == org.id,
             TraineeAgentTrainingProfile.user_id == user.id,
             TraineeAgentTrainingProfile.agent_id == ent.agent.id)).first()
+        reserved = {"agent_name", "user_name", "trainee_name", "trainee_training_context", "user_training_context"}
+        if personal:
+            variables.update({k: v for k, v in (personal.variable_values or {}).items()
+                              if k in schema_names and k not in reserved})
+        problems = variables_problems(schema, variables, require_all=True)
+        if problems:
+            raise TrainingError(422, "invalid_variables", "This scenario no longer matches the agent: " + " ".join(problems))
+        # Sarvam rejects undeclared agent variables. Inject runtime identity only when this
+        # particular published agent version declares the matching variable locally as well.
+        user_name = (user.name or "").strip() or user.email.split("@", 1)[0]
+        runtime_identity = {"agent_name": ent.agent.name, "user_name": user_name, "trainee_name": user_name}
+        variables.update({k: v for k, v in runtime_identity.items() if k in schema_names})
         if personal:
             parts = []
             if (personal.instructions or "").strip():
@@ -261,10 +264,12 @@ class TrainingEngine:
                     parts.append(f"SOURCE: {source.get('title') or 'Training material'}\n{value}")
             context = "\n\n".join(parts)[:12_000]
             if context:
-                # Both names ease migration of hosted prompts. The provider agent must reference one
-                # of these variables; the shared app/version itself is never rewritten by a trainee.
-                variables["trainee_training_context"] = context
-                variables["user_training_context"] = context
+                # The provider agent must declare and reference one of these variables. Never send an
+                # undeclared alias: Sarvam rejects the whole outbound request with HTTP 422.
+                if "trainee_training_context" in schema_names:
+                    variables["trainee_training_context"] = context
+                if "user_training_context" in schema_names:
+                    variables["user_training_context"] = context
         phone = None
         if channel == "phone":
             phone = user.phone_e164

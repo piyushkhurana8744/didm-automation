@@ -376,7 +376,7 @@ export interface MyAgent {
   description: string;
   category: string;
   channels: Channel[];
-  version: { id: string; internal_version: number; published_at: string | null };
+  version: { id: string; internal_version: number; published_at: string | null; variable_schema?: VarDef[] };
   access: {
     source: 'direct' | 'team';
     expires_at: string | null;
@@ -411,6 +411,7 @@ export interface MyAgentTrainingSource {
 
 export interface MyAgentTrainingProfile {
   instructions: string;
+  variable_values: Record<string, unknown>;
   sources: MyAgentTrainingSource[];
   updated_at: string | null;
 }
