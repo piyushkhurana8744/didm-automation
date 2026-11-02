@@ -18,6 +18,7 @@ import { Spinner } from '@/components/Spinner';
 import { Tabs, type TabItem } from '@/components/Tabs';
 import { WithQuery } from '@/components/WithQuery';
 import { AgentOverview } from '@/components/agent/AgentOverview';
+import { AgentTraining } from '@/components/agent/AgentTraining';
 import { DraftEditor } from '@/components/agent/DraftEditor';
 import { ScenarioPanel } from '@/components/agent/ScenarioPanel';
 import { VersionHistory } from '@/components/agent/VersionHistory';
@@ -39,6 +40,7 @@ function AgentDetailView({ membership, agentId, tab }: { membership: Membership;
   const tabs: TabItem[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'configuration', label: agent?.draft_version ? 'Configuration (draft)' : 'Configuration' },
+    { id: 'training', label: 'Training' },
     { id: 'versions', label: 'Versions' },
     { id: 'scenarios', label: agent ? `Scenarios (${agent.counts.scenarios})` : 'Scenarios' },
   ];
@@ -126,6 +128,7 @@ function AgentDetailView({ membership, agentId, tab }: { membership: Membership;
           />
         )}
         {current === 'configuration' && <DraftEditor orgId={orgId} agent={agent} canManage={canManage} onChanged={changed} />}
+        {current === 'training' && <AgentTraining orgId={orgId} agent={agent} canManage={canManage} onChanged={changed} />}
         {current === 'versions' && (
           <VersionHistory
             orgId={orgId}

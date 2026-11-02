@@ -13,6 +13,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { Spinner } from '@/components/Spinner';
 import { WithQuery } from '@/components/WithQuery';
 import { StartPractice } from '@/components/training/StartPractice';
+import { PersonalAgentTraining } from '@/components/training/PersonalAgentTraining';
 
 function MyAgentView({ membership, agentId }: { membership: Membership; agentId: string }) {
   const orgId = membership.organization.id;
@@ -65,6 +66,8 @@ function MyAgentView({ membership, agentId }: { membership: Membership; agentId:
         </p>
         <StartPractice orgId={orgId} agent={data} />
       </section>
+
+      <PersonalAgentTraining orgId={orgId} agentId={data.id} />
 
       <section aria-labelledby="scenarios-title">
         <h2 id="scenarios-title">Scenarios ({plural(data.scenarios.length, 'scenario')})</h2>

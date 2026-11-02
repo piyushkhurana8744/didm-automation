@@ -23,7 +23,7 @@ from ..db import SessionLocal, utcnow
 from ..integrations import CallTarget
 from .agents import allowed_scenarios, entitlements, variables_problems
 from .models import (OPEN_SESSION_STATUSES, BrowserSessionToken, Membership, Organization, TrainingOrgLimits,
-                     TrainingSession, TrainingSessionEvent, TrainingUsageAdjustment, TrainingUsageEvent,
+                     TraineeAgentTrainingProfile, TrainingSession, TrainingSessionEvent, TrainingUsageAdjustment, TrainingUsageEvent,
                      TrainingUsageReservation, User)
 
 log = logging.getLogger("didm.training")
@@ -247,6 +247,24 @@ class TrainingEngine:
         user_name = (user.name or "").strip() or user.email.split("@", 1)[0]
         variables.update({"agent_name": ent.agent.name, "user_name": user_name,
                           "trainee_name": user_name})
+        personal = db.scalars(select(TraineeAgentTrainingProfile).where(
+            TraineeAgentTrainingProfile.organization_id == org.id,
+            TraineeAgentTrainingProfile.user_id == user.id,
+            TraineeAgentTrainingProfile.agent_id == ent.agent.id)).first()
+        if personal:
+            parts = []
+            if (personal.instructions or "").strip():
+                parts.append("TRAINEE INSTRUCTIONS:\n" + personal.instructions.strip())
+            for source in personal.sources or []:
+                value = str(source.get("text") or "").strip()
+                if value:
+                    parts.append(f"SOURCE: {source.get('title') or 'Training material'}\n{value}")
+            context = "\n\n".join(parts)[:12_000]
+            if context:
+                # Both names ease migration of hosted prompts. The provider agent must reference one
+                # of these variables; the shared app/version itself is never rewritten by a trainee.
+                variables["trainee_training_context"] = context
+                variables["user_training_context"] = context
         phone = None
         if channel == "phone":
             phone = user.phone_e164

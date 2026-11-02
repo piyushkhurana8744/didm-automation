@@ -214,6 +214,17 @@ def build_knowledge_router(settings) -> APIRouter:
         db.commit()
         return {"revision_ids": ids}
 
+    @r.get("/agents/{agent_id}/versions/{version_id}/knowledge-items")
+    def attached(agent_id: str, version_id: str,
+                 ctx: OrgContext = Depends(org_access("agents.preview")), db: Session = Depends(get_db)):
+        agent = scoped_get(db, Agent, ctx.org.id, agent_id)
+        version = db.scalars(select(AgentVersion).where(
+            AgentVersion.id == version_id, AgentVersion.agent_id == agent.id,
+            AgentVersion.organization_id == ctx.org.id)).first()
+        if version is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        return {"revision_ids": attached_ids(db, ctx.org.id, version.id)}
+
     @r.put("/agents/{agent_id}/versions/{version_id}/behavior")
     def behavior(agent_id: str, version_id: str, body: BehaviorIn, request: Request,
                  ctx: OrgContext = Depends(org_access("agents.manage")), db: Session = Depends(get_db)):

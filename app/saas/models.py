@@ -484,6 +484,26 @@ class TrainingTranscriptTurn(Base):
     end_ms = Column(Integer, nullable=True)
 
 
+class TraineeAgentTrainingProfile(Base):
+    """A trainee-owned training overlay for one currently assigned agent.
+
+    It never mutates the shared agent/version. Sources contain extracted text only; uploaded binaries are
+    not retained. Assignment checks are repeated on every API operation and when a call is created.
+    """
+    __tablename__ = "trainee_agent_training_profiles"
+    __table_args__ = (UniqueConstraint("organization_id", "user_id", "agent_id",
+                                      name="uq_trainee_agent_training_owner"),
+                      Index("ix_trainee_agent_training_lookup", "organization_id", "user_id", "agent_id"))
+    id = Column(String(36), primary_key=True, default=new_id)
+    organization_id = Column(String(36), ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    agent_id = Column(String(36), ForeignKey("agents.id"), nullable=False)
+    instructions = Column(Text, nullable=False, default="")
+    sources = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, nullable=False, default=utcnow)
+    updated_at = Column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+
 class TrainingRecording(Base):
     """Where a session's audio is kept. The audio itself lives in private object storage, never here."""
     __tablename__ = "training_recordings"

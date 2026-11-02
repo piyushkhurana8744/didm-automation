@@ -4,6 +4,9 @@ Agents are hosted at Sarvam. Sarvam has no verified public API for creating or e
 agent here is a link to an app that was built in Sarvam's dashboard: we store its app id, and each
 published version records the exact Sarvam app version it uses. Nothing in this module calls Sarvam.
 """
+import base64
+import hashlib
+import io
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -16,7 +19,8 @@ from sqlalchemy.orm import Session
 
 from ..db import utcnow
 from .auth import OrgContext, audit, get_db, org_access, scoped_get
-from .models import (Agent, AgentAssignment, AgentVersion, Membership, Team, TeamMember, TrainingScenario, User)
+from .models import (Agent, AgentAssignment, AgentVersion, Membership, Team, TeamMember, TraineeAgentTrainingProfile,
+                     TrainingScenario, TrainingSession, TrainingTranscript, TrainingTranscriptTurn, User)
 from .permissions import ADMIN, RANK, can_assign_to
 
 PROVIDERS = ("sarvam",)
@@ -524,6 +528,24 @@ class AssignmentSettings(BaseModel):
     allowed_scenario_ids: list[str] | None = Field(default=None, max_length=200)
     max_sessions: int | None = Field(default=None, ge=1, le=10000)
     max_minutes_per_session: int | None = Field(default=None, ge=1, le=180)
+
+
+class MyTrainingProfileIn(BaseModel):
+    instructions: str = Field(default="", max_length=10_000)
+
+
+class MyTrainingTextIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=30_000)
+
+
+class MyTrainingPdfIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=200)
+    content_base64: str = Field(min_length=1, max_length=7_000_000)
+
+
+class MyTrainingTranscriptIn(BaseModel):
+    session_id: str = Field(max_length=36)
 
 
 class AssignIn(BaseModel):
@@ -1237,6 +1259,131 @@ def build_agents_router() -> APIRouter:
         if not ents:
             raise HTTPException(status_code=404, detail="Not found.")
         return my_agent_out(db, ents[0], with_scenarios=True)
+
+    def my_training_profile(db: Session, ctx: OrgContext, agent_id: str, create: bool = False):
+        # The entitlement is deliberately checked on every operation. A saved profile does not preserve
+        # access after an assignment is revoked or expires.
+        if not entitlements(db, ctx.org.id, ctx.user.id, agent_id):
+            raise HTTPException(status_code=404, detail="Not found.")
+        row = db.scalars(select(TraineeAgentTrainingProfile).where(
+            TraineeAgentTrainingProfile.organization_id == ctx.org.id,
+            TraineeAgentTrainingProfile.user_id == ctx.user.id,
+            TraineeAgentTrainingProfile.agent_id == agent_id)).first()
+        if row is None and create:
+            row = TraineeAgentTrainingProfile(organization_id=ctx.org.id, user_id=ctx.user.id,
+                                               agent_id=agent_id, instructions="", sources=[])
+            db.add(row); db.flush()
+        return row
+
+    def profile_out(row):
+        return {"instructions": row.instructions if row else "", "sources": list(row.sources or []) if row else [],
+                "updated_at": iso(row.updated_at) if row else None}
+
+    def add_profile_source(row, source: dict):
+        sources = list(row.sources or [])
+        sources.append(source)
+        if sum(len(str(x.get("text") or "")) for x in sources) > 60_000:
+            raise HTTPException(status_code=422, detail="Your personal agent training can contain at most 60,000 characters.")
+        row.sources = sources
+        row.updated_at = utcnow()
+
+    @r.get("/my/agents/{agent_id}/training-profile")
+    def get_my_training_profile(agent_id: str, ctx: OrgContext = Depends(org_access("training.self")),
+                                db: Session = Depends(get_db)):
+        return profile_out(my_training_profile(db, ctx, agent_id))
+
+    @r.put("/my/agents/{agent_id}/training-profile")
+    def update_my_training_profile(agent_id: str, body: MyTrainingProfileIn, request: Request,
+                                   ctx: OrgContext = Depends(org_access("training.self")), db: Session = Depends(get_db)):
+        row = my_training_profile(db, ctx, agent_id, create=True)
+        row.instructions, row.updated_at = body.instructions.strip(), utcnow()
+        audit(db, request, "trainee.agent_training_updated", actor=ctx.user, organization_id=ctx.org.id,
+              target_type="agent", target_id=agent_id, details={"source_count": len(row.sources or [])})
+        db.commit()
+        return profile_out(row)
+
+    @r.post("/my/agents/{agent_id}/training-profile/text", status_code=201)
+    def add_my_training_text(agent_id: str, body: MyTrainingTextIn, request: Request,
+                             ctx: OrgContext = Depends(org_access("training.self")), db: Session = Depends(get_db)):
+        row = my_training_profile(db, ctx, agent_id, create=True)
+        text_value = body.text.strip()
+        add_profile_source(row, {"id": hashlib.sha256((body.title + text_value + str(utcnow())).encode()).hexdigest()[:24],
+                                 "kind": "text", "title": body.title.strip(), "text": text_value,
+                                 "created_at": iso(utcnow())})
+        audit(db, request, "trainee.agent_training_source_added", actor=ctx.user, organization_id=ctx.org.id,
+              target_type="agent", target_id=agent_id, details={"kind": "text"})
+        db.commit()
+        return profile_out(row)
+
+    @r.post("/my/agents/{agent_id}/training-profile/pdf", status_code=201)
+    def add_my_training_pdf(agent_id: str, body: MyTrainingPdfIn, request: Request,
+                            ctx: OrgContext = Depends(org_access("training.self")), db: Session = Depends(get_db)):
+        row = my_training_profile(db, ctx, agent_id, create=True)
+        try:
+            raw = base64.b64decode(body.content_base64, validate=True)
+        except Exception:
+            raise HTTPException(status_code=422, detail="The PDF upload is not valid base64.")
+        if len(raw) > 5_000_000 or not raw.startswith(b"%PDF-"):
+            raise HTTPException(status_code=422, detail="Upload a valid PDF no larger than 5 MB.")
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(raw), strict=True)
+            if reader.is_encrypted:
+                raise ValueError("encrypted")
+            extracted = "\n\n".join((p.extract_text() or "").strip() for p in reader.pages).strip()
+        except Exception:
+            raise HTTPException(status_code=422, detail="This PDF could not be safely read. Encrypted or malformed PDFs are not accepted.")
+        if not extracted:
+            raise HTTPException(status_code=422, detail="No selectable text was found in this PDF. Scanned PDFs need OCR first.")
+        extracted = extracted[:30_000]
+        add_profile_source(row, {"id": hashlib.sha256(raw).hexdigest()[:24], "kind": "pdf",
+                                 "title": body.filename.strip(), "text": extracted,
+                                 "sha256": hashlib.sha256(raw).hexdigest(), "created_at": iso(utcnow())})
+        audit(db, request, "trainee.agent_training_source_added", actor=ctx.user, organization_id=ctx.org.id,
+              target_type="agent", target_id=agent_id, details={"kind": "pdf", "size_bytes": len(raw)})
+        db.commit()
+        return profile_out(row)
+
+    @r.post("/my/agents/{agent_id}/training-profile/transcript", status_code=201)
+    def add_my_training_transcript(agent_id: str, body: MyTrainingTranscriptIn, request: Request,
+                                   ctx: OrgContext = Depends(org_access("training.self")), db: Session = Depends(get_db)):
+        row = my_training_profile(db, ctx, agent_id, create=True)
+        session = db.scalars(select(TrainingSession).where(
+            TrainingSession.id == body.session_id, TrainingSession.organization_id == ctx.org.id,
+            TrainingSession.user_id == ctx.user.id, TrainingSession.agent_id == agent_id)).first()
+        if session is None:
+            raise HTTPException(status_code=404, detail="That is not one of your calls with this agent.")
+        transcript = db.scalars(select(TrainingTranscript).where(
+            TrainingTranscript.session_id == session.id, TrainingTranscript.purged_at.is_(None))).first()
+        if transcript is None or transcript.status not in ("complete", "partial"):
+            raise HTTPException(status_code=409, detail="This call transcript is not available.")
+        turns = db.scalars(select(TrainingTranscriptTurn).where(
+            TrainingTranscriptTurn.transcript_id == transcript.id).order_by(TrainingTranscriptTurn.sequence_number)).all()
+        value = "\n".join(f"{x.speaker}: {x.text}" for x in turns).strip()[:30_000]
+        if not value:
+            raise HTTPException(status_code=409, detail="This call transcript is empty.")
+        add_profile_source(row, {"id": hashlib.sha256((session.id + value).encode()).hexdigest()[:24],
+                                 "kind": "transcript", "title": f"Practice call {session.created_at.date().isoformat()}",
+                                 "text": value, "session_id": session.id, "created_at": iso(utcnow())})
+        audit(db, request, "trainee.agent_training_source_added", actor=ctx.user, organization_id=ctx.org.id,
+              target_type="agent", target_id=agent_id, details={"kind": "transcript", "session_id": session.id})
+        db.commit()
+        return profile_out(row)
+
+    @r.delete("/my/agents/{agent_id}/training-profile/sources/{source_id}")
+    def delete_my_training_source(agent_id: str, source_id: str, request: Request,
+                                  ctx: OrgContext = Depends(org_access("training.self")), db: Session = Depends(get_db)):
+        row = my_training_profile(db, ctx, agent_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        kept = [x for x in (row.sources or []) if x.get("id") != source_id]
+        if len(kept) == len(row.sources or []):
+            raise HTTPException(status_code=404, detail="Not found.")
+        row.sources, row.updated_at = kept, utcnow()
+        audit(db, request, "trainee.agent_training_source_removed", actor=ctx.user, organization_id=ctx.org.id,
+              target_type="agent", target_id=agent_id, details={"source_id": source_id})
+        db.commit()
+        return profile_out(row)
 
     @r.get("/my/assignments")
     def my_assignments(ctx: OrgContext = Depends(org_access("training.self")), db: Session = Depends(get_db)):

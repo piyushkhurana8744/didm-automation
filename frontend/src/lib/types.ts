@@ -236,6 +236,12 @@ export interface AgentVersion {
   knowledge_base_reference: string;
   rubric_reference: string;
   notes: string;
+  behavior_snapshot?: AgentBehavior;
+  knowledge_snapshot_id?: string | null;
+  provider_sync_id?: string | null;
+  validation_report_id?: string | null;
+  release_state?: string;
+  content_hash?: string | null;
   status: VersionStatus;
   based_on_version_id: string | null;
   created_by: string | null;
@@ -243,6 +249,27 @@ export interface AgentVersion {
   published_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentBehavior {
+  role: 'ai_student_customer' | 'ai_admissions_counsellor';
+  persona: string;
+  objective: string;
+  instructions: string;
+  languages: string[];
+  default_language: string;
+  unknown_answer: string;
+  escalation: string;
+}
+
+export interface AgentKnowledgeSelection {
+  revision_ids: string[];
+}
+
+export interface AgentKnowledgeValidation {
+  id: string;
+  status: 'passed' | 'failed';
+  findings: Array<{ code: string; message: string }>;
 }
 
 export interface VersionListItem extends AgentVersion {
@@ -370,6 +397,22 @@ export interface MyScenario {
 
 export interface MyAgentDetail extends MyAgent {
   scenarios: MyScenario[];
+}
+
+export interface MyAgentTrainingSource {
+  id: string;
+  kind: 'text' | 'pdf' | 'transcript';
+  title: string;
+  text: string;
+  created_at: string;
+  session_id?: string;
+  sha256?: string;
+}
+
+export interface MyAgentTrainingProfile {
+  instructions: string;
+  sources: MyAgentTrainingSource[];
+  updated_at: string | null;
 }
 
 export interface MyAssignment {
