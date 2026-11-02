@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -142,7 +142,12 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
 
     @app.get("/")
     def home():
-        return {"ok": True, "message": "DIDM automation is running. Open /dashboard?token=YOUR_ADMIN_TOKEN"}
+        dist = Path(s.frontend_dist_dir)
+        if not dist.is_absolute():
+            dist = Path(__file__).resolve().parent.parent / dist
+        if dist.is_dir():
+            return RedirectResponse(url="/app/")
+        return {"ok": True, "message": "DIDM automation is running. Open /app/ once built, or /dashboard?token=YOUR_ADMIN_TOKEN"}
 
     @app.get("/healthz")
     def healthz():
