@@ -1,0 +1,39 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "frontend": {
+      "root": "frontend",
+      "framework": "nextjs"
+    },
+    "app": {
+      "root": ".",
+      "entrypoint": "app.server:app"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": { "service": "app" }
+    },
+    {
+      "source": "/webhooks/(.*)",
+      "destination": { "service": "app" }
+    },
+    {
+      "source": "/admin/(.*)",
+      "destination": { "service": "app" }
+    },
+    {
+      "source": "/healthz",
+      "destination": { "service": "app" }
+    },
+    {
+      "source": "/readyz",
+      "destination": { "service": "app" }
+    },
+    {
+      "source": "/(.*)",
+      "destination": { "service": "frontend" }
+    }
+  ]
+}
