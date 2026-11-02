@@ -87,7 +87,11 @@ class Settings:
     sarvam_base_url: str = field(default_factory=lambda: os.getenv("SARVAM_BASE_URL", "https://apps.sarvam.ai/api/outbounds").strip().rstrip("/"))
     # Encrypts the organization-scoped, short-lived Sarvam MCP OAuth token. Use a random value of at
     # least 32 characters. It is deliberately separate from webhook/API credentials.
-    sarvam_mcp_encryption_key: str = field(default_factory=lambda: _clean_secret("SARVAM_MCP_ENCRYPTION_KEY", ""))
+    # WEBHOOK_SECRET is already a deployment-generated secret, so it is a safe compatibility fallback
+    # for existing services whose blueprint has not yet synced the dedicated key. Rotating either key
+    # only invalidates the short-lived OAuth connection; the user can reconnect Sarvam.
+    sarvam_mcp_encryption_key: str = field(default_factory=lambda: (
+        _clean_secret("SARVAM_MCP_ENCRYPTION_KEY", "") or _clean_secret("WEBHOOK_SECRET", "")))
     sarvam_mcp_url: str = field(default_factory=lambda: os.getenv(
         "SARVAM_MCP_URL", "https://mcp.sarvam.ai/voice-agents").strip().rstrip("/"))
     # Knowledge authoring is a separate trust boundary from existing training. It is permanently

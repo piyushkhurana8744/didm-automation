@@ -24,7 +24,7 @@ class SarvamMCPError(RuntimeError):
 
 
 def _fernet(secret: str) -> Fernet:
-    if len(secret) < 32:
+    if not secret:
         raise SarvamMCPError("Sarvam auto-fetch is not configured. Set SARVAM_MCP_ENCRYPTION_KEY.")
     return Fernet(base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest()))
 
@@ -49,9 +49,9 @@ def connection_status(org, secret: str) -> dict:
     try:
         data = _load(org, secret)
     except SarvamMCPError as exc:
-        return {"configured": len(secret) >= 32, "connected": False, "detail": str(exc)}
+        return {"configured": bool(secret), "connected": False, "detail": str(exc)}
     expiry = int(data.get("expires_at") or 0)
-    return {"configured": len(secret) >= 32, "connected": bool(data.get("access_token") and expiry > time.time() + 30),
+    return {"configured": bool(secret), "connected": bool(data.get("access_token") and expiry > time.time() + 30),
             "expires_at": expiry or None}
 
 
