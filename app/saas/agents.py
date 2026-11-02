@@ -1,8 +1,8 @@
 """Voice agent registry for the training SaaS: teams, agents, immutable versions, scenarios and assignments.
 
-Agents are hosted at Sarvam. Sarvam has no verified public API for creating or editing agents, so an
-agent here is a link to an app that was built in Sarvam's dashboard: we store its app id, and each
-published version records the exact Sarvam app version it uses. Nothing in this module calls Sarvam.
+Agents are hosted at Sarvam. An agent here is a link to an app built in Sarvam: we store its app id,
+and each published version records the exact Sarvam app version it uses. The optional read-only MCP
+connection imports agent metadata; creation, editing and publishing at Sarvam remain out of scope.
 """
 import base64
 import hashlib
@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import event, func, inspect, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -475,6 +476,7 @@ class AgentIn(BaseModel):
     provider_app_id: str = Field(min_length=1, max_length=200)
     channels: list[str] = Field(default_factory=lambda: ["phone"], max_length=len(CHANNELS))
     provider_app_version: int | None = Field(default=None, ge=1)
+    variable_schema: list = Field(default_factory=list, max_length=50)
 
 
 class AgentPatch(BaseModel):
@@ -703,6 +705,56 @@ def build_agents_router() -> APIRouter:
         return {"ok": True}
 
     # ---------- agents ----------
+    @r.get("/integrations/sarvam/status")
+    def sarvam_status(request: Request, ctx: OrgContext = Depends(org_access("agents.manage"))):
+        from .sarvam_mcp import connection_status
+        s = request.app.state.settings
+        return connection_status(ctx.org, s.sarvam_mcp_encryption_key)
+
+    @r.post("/integrations/sarvam/connect")
+    def connect_sarvam(request: Request, ctx: OrgContext = Depends(org_access("agents.manage")),
+                       db: Session = Depends(get_db)):
+        from .sarvam_mcp import SarvamMCPError, begin
+        s = request.app.state.settings
+        base = s.public_base_url or str(request.base_url).rstrip("/")
+        callback_url = f"{base}/api/v1/organizations/{ctx.org.id}/integrations/sarvam/callback"
+        try:
+            authorization_url = begin(ctx.org, s.sarvam_mcp_encryption_key, s.sarvam_mcp_url, callback_url)
+        except SarvamMCPError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        audit(db, request, "sarvam.connection_started", actor=ctx.user, organization_id=ctx.org.id,
+              target_type="organization", target_id=ctx.org.id)
+        db.commit()
+        return {"authorization_url": authorization_url}
+
+    @r.get("/integrations/sarvam/callback")
+    def sarvam_callback(request: Request, code: str = "", state: str = "", error: str = "",
+                        ctx: OrgContext = Depends(org_access("agents.manage")), db: Session = Depends(get_db)):
+        from .sarvam_mcp import SarvamMCPError, callback
+        s = request.app.state.settings
+        target = f"{s.app_url()}/agents/new/" if s.app_url() else "/app/agents/new/"
+        if error:
+            return RedirectResponse(f"{target}?sarvam=error")
+        try:
+            callback(ctx.org, s.sarvam_mcp_encryption_key, code, state)
+        except SarvamMCPError:
+            return RedirectResponse(f"{target}?sarvam=error")
+        audit(db, request, "sarvam.connected", actor=ctx.user, organization_id=ctx.org.id,
+              target_type="organization", target_id=ctx.org.id)
+        db.commit()
+        return RedirectResponse(f"{target}?sarvam=connected")
+
+    @r.get("/integrations/sarvam/agents/{provider_app_id}")
+    def lookup_sarvam_agent(provider_app_id: str, request: Request,
+                            ctx: OrgContext = Depends(org_access("agents.manage"))):
+        from .sarvam_mcp import SarvamMCPError, fetch_agent
+        app_id = check_app_id(provider_app_id)
+        s = request.app.state.settings
+        try:
+            return fetch_agent(ctx.org, s.sarvam_mcp_encryption_key, s.sarvam_mcp_url, app_id)
+        except SarvamMCPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
     @r.get("/agents")
     def list_agents(status: str = "active", q: str = "", category: str = "", limit: int = 50, offset: int = 0,
                     ctx: OrgContext = Depends(org_access("agents.view")), db: Session = Depends(get_db)):
@@ -737,6 +789,9 @@ def build_agents_router() -> APIRouter:
         if body.provider not in PROVIDERS:
             raise HTTPException(status_code=422, detail="Only Sarvam agents are supported.")
         check_channels(body.channels)
+        problems = schema_problems(body.variable_schema)
+        if problems:
+            unprocessable(problems)
         app_id = check_app_id(body.provider_app_id)
         a = Agent(organization_id=ctx.org.id, name=body.name.strip(), description=body.description,
                   category=body.category.strip(), provider=body.provider, provider_app_id=app_id,
@@ -750,7 +805,7 @@ def build_agents_router() -> APIRouter:
             raise HTTPException(status_code=409, detail="That provider app is already registered.")
         v = AgentVersion(organization_id=ctx.org.id, agent_id=a.id, internal_version=1,
                          provider_app_version=body.provider_app_version, configuration_snapshot={},
-                         variable_schema=[], status="draft", created_by=ctx.user.id)
+                         variable_schema=body.variable_schema, status="draft", created_by=ctx.user.id)
         db.add(v)
         db.flush()
         audit(db, request, "agent.registered", actor=ctx.user, organization_id=ctx.org.id, target_type="agent",

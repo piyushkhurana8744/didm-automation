@@ -18,6 +18,8 @@ services:
         generateValue: true
       - key: WEBHOOK_SECRET
         generateValue: true
+      - key: SARVAM_MCP_ENCRYPTION_KEY
+        generateValue: true
       - key: TIMEZONE
         value: Asia/Kolkata
       - key: SPREADSHEET_ID
