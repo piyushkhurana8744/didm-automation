@@ -10,6 +10,13 @@
       "entrypoint": "app.server:app"
     }
   },
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/app/login/",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/(.*)",
@@ -37,4 +44,3 @@
     }
   ]
 }
-
