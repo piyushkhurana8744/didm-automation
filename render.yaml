@@ -1,0 +1,120 @@
+# Render blueprint: creates the web app and its database in one go.
+services:
+  - type: web
+    name: didm-automation
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: didm-automation-db
+          property: connectionString
+      - key: DRY_RUN
+        value: "true"
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: TIMEZONE
+        value: Asia/Kolkata
+      - key: SPREADSHEET_ID
+        value: 10tOJBvZEV4cHzpyAsUDI1JRSghVXVetymzrfqIlkktM
+      - key: SARVAM_ORG_ID
+        value: 01a08500-9374-7cc7-be00-0f5dba1e8e10
+      - key: SARVAM_WORKSPACE_ID
+        value: 01a08500-937a-7bc4-bac4-a77b0c19b62c
+      - key: SARVAM_APP_ID
+        value: DIDM-Lead-C-997416bf-80db
+      - key: SARVAM_APP_VERSION
+        value: "7"
+      - key: SARVAM_CONNECTION_ID
+        value: a2b3631a-93-d7afd5e3-3035
+      - key: SARVAM_AGENT_PHONE
+        value: "+917965853567"
+      - key: VEBLIKA_PHONE_NO_ID
+        value: "1160174610512143"
+      - key: VEBLIKA_TEMPLATE
+        value: harpreetdemo
+      - key: VEBLIKA_HEADER_IMAGE_URL
+        value: https://lh3.googleusercontent.com/d/1rEAzUj4VXBgM2uxb4isYPLbFtEqUnGFU
+      - key: PUBLIC_BASE_URL
+        sync: false
+      # Training web app
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+      - key: WEBHOOK_PROCESSING
+        value: inline
+      # Training sessions: both channels stay off until approved; set the webhook secret before enabling
+      - key: TRAINING_PHONE_ENABLED
+        value: "false"
+      - key: TRAINING_BROWSER_ENABLED
+        value: "false"
+      - key: TRAINING_WEBHOOK_SECRET
+        sync: false
+      - key: TRAINING_MAX_CONCURRENT_TOTAL
+        value: "2"
+      # Training intelligence: evaluation is billed per token, so it stays off until approved
+      - key: TRAINING_PROVIDER_LOOKUPS_ENABLED
+        value: "false"
+      - key: EVALUATOR_PROVIDER
+        value: ""
+      - key: SARVAM_CHAT_API_KEY
+        sync: false
+      # Phase 5: everything below stays off until approved (docs/phase5_deployment.md)
+      - key: EVALUATION_DEFAULT_MONTHLY_CALLS
+        value: "200"
+      - key: EVALUATION_PLATFORM_DAILY_CALLS
+        value: "300"
+      - key: RECORDING_STORE
+        value: ""
+      - key: RECORDING_ALLOWED_PROVIDERS
+        value: ""
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_FOLDER
+        value: didm-recordings
+      - key: RECORDING_SOURCE_ENABLED
+        value: "false"
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: RETENTION_ENFORCEMENT_ENABLED
+        value: "false"
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: VEBLIKA_API_KEY
+        sync: false
+      - key: VEBLIKA_AUTH_NAME
+        sync: false
+      - key: VEBLIKA_AUTH_IN
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: ALERT_EMAIL_TO
+        sync: false
+databases:
+  - name: didm-automation-db
+    plan: free
+    region: singapore
