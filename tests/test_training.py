@@ -123,7 +123,9 @@ def test_phone_session_starts_with_pinned_version_and_training_webhook(tw):
     assert call["target"].app_id == f"app-{a.id[:6]}" and call["target"].app_version == 3
     assert call["webhook_url"] == f"https://automation.example.in/webhooks/sarvam-training/{SECRET}"
     assert call["metadata"]["session_id"] == s["id"] and call["metadata"]["kind"] == "training"
-    assert call["variables"] == {"tone": "friendly", "student_name": "Riya", "course": "MBA"}
+    assert call["variables"] == {"tone": "friendly", "student_name": "Riya", "course": "MBA",
+                                 "agent_name": "Admissions caller", "user_name": "t1@alpha.in",
+                                 "trainee_name": "t1@alpha.in"}
     assert row(s["id"]).provider_attempt_id == "att-1"
     with SessionLocal() as db:
         res = db.scalars(select(TrainingUsageReservation).where(TrainingUsageReservation.session_id == s["id"])).one()

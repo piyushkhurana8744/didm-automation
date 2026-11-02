@@ -240,6 +240,13 @@ class TrainingEngine:
         problems = variables_problems(schema, variables, require_all=True)
         if problems:
             raise TrainingError(422, "invalid_variables", "This scenario no longer matches the agent: " + " ".join(problems))
+        # Provider prompts can use {{agent_name}} and either {{user_name}} or
+        # {{trainee_name}}.  These authoritative runtime values deliberately win over any
+        # similarly named scenario variables.  Keep both user aliases while hosted agents
+        # migrate to the canonical user_name variable.
+        user_name = (user.name or "").strip() or user.email.split("@", 1)[0]
+        variables.update({"agent_name": ent.agent.name, "user_name": user_name,
+                          "trainee_name": user_name})
         phone = None
         if channel == "phone":
             phone = user.phone_e164
