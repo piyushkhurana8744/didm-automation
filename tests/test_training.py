@@ -8,11 +8,18 @@ from sqlalchemy import func, select
 from app.db import CallAttempt, SessionLocal, WhatsAppMessage, utcnow
 from app.saas.models import (BrowserSessionToken, Membership, Organization, TrainingSession, TrainingSessionEvent,
                              TrainingUsageEvent, TrainingUsageReservation, User)
-from app.saas.training import TrainingError, webhook_signature
+from app.saas.training import TrainingError, runtime_identity_variables, webhook_signature
 from tests.test_agents import Org, assign, publish_agent, scenario
 from tests.test_saas import saas  # noqa: F401  (fixture)
 
 SECRET = "train-secret"
+
+
+def test_runtime_identity_uses_declared_aliases_and_legacy_lead_name():
+    assert runtime_identity_variables(set(), "Piyush", "Counsellor") == {"lead_name": "Piyush"}
+    assert runtime_identity_variables({"user_name", "agent_name"}, "Piyush", "Counsellor") == {
+        "user_name": "Piyush", "agent_name": "Counsellor"}
+    assert runtime_identity_variables({"student_name"}, "Piyush", "Counsellor") == {"student_name": "Piyush"}
 
 
 class FakeSarvam:

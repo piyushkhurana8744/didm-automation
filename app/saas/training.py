@@ -28,6 +28,26 @@ from .models import (OPEN_SESSION_STATUSES, BrowserSessionToken, Membership, Org
 
 log = logging.getLogger("didm.training")
 
+
+def runtime_identity_variables(schema_names: set[str], user_name: str, agent_name: str) -> dict:
+    """Map the signed-in trainee to the identity aliases declared by the Sarvam agent.
+
+    Older registrations have an empty local schema even though the DIDM Sarvam agent declares
+    ``lead_name``. Keep that established outbound-call contract as the narrow legacy fallback.
+    """
+    candidates = {
+        "agent_name": agent_name,
+        "user_name": user_name,
+        "trainee_name": user_name,
+        "lead_name": user_name,
+        "student_name": user_name,
+        "customer_name": user_name,
+        "name": user_name,
+    }
+    if not schema_names:
+        return {"lead_name": user_name}
+    return {key: value for key, value in candidates.items() if key in schema_names}
+
 # ---------- state machine ----------
 TERMINAL = ("completed", "failed", "cancelled", "timed_out")
 TRANSITIONS = {
@@ -246,14 +266,16 @@ class TrainingEngine:
         if personal:
             variables.update({k: v for k, v in (personal.variable_values or {}).items()
                               if k in schema_names and k not in reserved})
+        # Sarvam rejects undeclared agent variables. Inject runtime identity only when this
+        # particular published agent version declares the matching variable locally as well. Old
+        # DIDM registrations predate local schemas and use the established `lead_name` contract.
+        user_name = (user.name or "").strip() or user.email.split("@", 1)[0]
+        for key, value in runtime_identity_variables(schema_names, user_name, ent.agent.name).items():
+            # An explicit scenario/persona value is intentional and wins over the signed-in identity.
+            variables.setdefault(key, value)
         problems = variables_problems(schema, variables, require_all=True)
         if problems:
             raise TrainingError(422, "invalid_variables", "This scenario no longer matches the agent: " + " ".join(problems))
-        # Sarvam rejects undeclared agent variables. Inject runtime identity only when this
-        # particular published agent version declares the matching variable locally as well.
-        user_name = (user.name or "").strip() or user.email.split("@", 1)[0]
-        runtime_identity = {"agent_name": ent.agent.name, "user_name": user_name, "trainee_name": user_name}
-        variables.update({k: v for k, v in runtime_identity.items() if k in schema_names})
         if personal:
             parts = []
             if (personal.instructions or "").strip():
