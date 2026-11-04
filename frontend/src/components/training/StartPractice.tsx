@@ -82,12 +82,49 @@ export function StartPractice({ orgId, agent }: { orgId: string; agent: MyAgentD
   const [scenarioId, setScenarioId] = useState(agent.scenarios[0]?.id ?? '');
   const [leadName, setLeadName] = useState(me?.user?.name || '');
   const [extraParams, setExtraParams] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
-    if (me?.user?.name && !leadName) {
-      setLeadName(me.user.name);
+    try {
+      const savedLead = localStorage.getItem(`didm_lead_name_${agent.id}`) || localStorage.getItem('didm_lead_name');
+      const savedExtra = localStorage.getItem(`didm_extra_params_${agent.id}`);
+      if (savedLead) setLeadName(savedLead);
+      else if (me?.user?.name) setLeadName(me.user.name);
+      if (savedExtra) setExtraParams(savedExtra);
+    } catch {
+      if (me?.user?.name) setLeadName(me.user.name);
     }
-  }, [me?.user?.name]);
+  }, [agent.id, me?.user?.name]);
+
+  function saveDefaults() {
+    try {
+      if (leadName.trim()) {
+        localStorage.setItem(`didm_lead_name_${agent.id}`, leadName.trim());
+        localStorage.setItem('didm_lead_name', leadName.trim());
+      }
+      if (extraParams.trim()) {
+        localStorage.setItem(`didm_extra_params_${agent.id}`, extraParams.trim());
+      } else {
+        localStorage.removeItem(`didm_extra_params_${agent.id}`);
+      }
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch {
+      // ignore
+    }
+  }
+
+  function resetToProfile() {
+    const profileName = me?.user?.name || '';
+    setLeadName(profileName);
+    setExtraParams('');
+    try {
+      localStorage.removeItem(`didm_lead_name_${agent.id}`);
+      localStorage.removeItem(`didm_extra_params_${agent.id}`);
+    } catch {
+      // ignore
+    }
+  }
 
   // Recording needs the trainee's say-so every time: the box starts unticked.
   const [recordConsent, setRecordConsent] = useState(false);
@@ -114,6 +151,7 @@ export function StartPractice({ orgId, agent }: { orgId: string; agent: MyAgentD
   async function onStart(e: FormEvent) {
     e.preventDefault();
     if (busy || !canStart) return;
+    saveDefaults();
     setError(null);
     setBusy(true);
     requestId.current ??= newRequestId();
@@ -204,6 +242,28 @@ export function StartPractice({ orgId, agent }: { orgId: string; agent: MyAgentD
               />
             </div>
           </details>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem', marginBottom: '1rem' }}>
+            <button
+              type="button"
+              className="button button-secondary button-small"
+              onClick={saveDefaults}
+            >
+              Save as default
+            </button>
+            <button
+              type="button"
+              className="button button-text button-small"
+              onClick={resetToProfile}
+              style={{ color: '#888', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.85rem' }}
+            >
+              Reset to profile
+            </button>
+            {saveSuccess && (
+              <span className="badge badge-ok" style={{ fontSize: '0.8rem' }}>
+                Saved ✓
+              </span>
+            )}
+          </div>
           {notice && (
             <div className="consent">
               <p className="small consent-text pre-line">{notice.text}</p>
