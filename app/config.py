@@ -151,13 +151,13 @@ class Settings:
     training_webhook_secret: str = field(default_factory=lambda: os.getenv("TRAINING_WEBHOOK_SECRET", ""))
     # Platform-wide cap on open training sessions: keep it within the Sarvam plan's concurrency, minus
     # what the lead dialler uses (MAX_PARALLEL_CALLS)
-    training_max_concurrent_total: int = field(default_factory=lambda: _int("TRAINING_MAX_CONCURRENT_TOTAL", 2))
+    training_max_concurrent_total: int = field(default_factory=lambda: _int("TRAINING_MAX_CONCURRENT_TOTAL", 100))
     # Defaults for organizations whose limits leave a field empty
-    training_default_org_concurrency: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_ORG_CONCURRENCY", 1))
-    training_default_user_concurrency: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_USER_CONCURRENCY", 1))
-    training_default_sessions_per_day: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_SESSIONS_PER_DAY", 3))
-    training_default_session_minutes: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_SESSION_MINUTES", 10))
-    training_default_monthly_minutes: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_MONTHLY_MINUTES", 120))
+    training_default_org_concurrency: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_ORG_CONCURRENCY", 50))
+    training_default_user_concurrency: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_USER_CONCURRENCY", 10))
+    training_default_sessions_per_day: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_SESSIONS_PER_DAY", 10000))
+    training_default_session_minutes: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_SESSION_MINUTES", 60))
+    training_default_monthly_minutes: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_MONTHLY_MINUTES", 1_000_000))
     # A session that has not reached the provider within this many seconds is failed and its capacity freed
     training_start_timeout_seconds: int = field(default_factory=lambda: _int("TRAINING_START_TIMEOUT_SECONDS", 120))
     # Extra wait for the provider's final result after the longest allowed session, before timing it out

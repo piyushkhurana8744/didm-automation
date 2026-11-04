@@ -316,7 +316,7 @@ export function valuesFromRaw(
 export function accessLine(a: MyAgent): string {
   const parts = [a.access.source === 'team' ? 'Through your team' : 'Assigned to you'];
   parts.push(a.access.expires_at ? `until ${formatDate(a.access.expires_at)}` : 'no end date');
-  if (a.access.max_sessions) parts.push(`up to ${plural(a.access.max_sessions, 'session')}`);
+  parts.push(a.access.max_sessions ? `up to ${plural(a.access.max_sessions, 'session')}` : 'unlimited sessions');
   if (a.access.max_minutes_per_session) parts.push(`${a.access.max_minutes_per_session} min per session`);
   return parts.join(' · ');
 }
