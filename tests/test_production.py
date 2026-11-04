@@ -585,7 +585,7 @@ def test_readiness_endpoints(ti):
     assert r.status_code == 200 and r.json() == {"ok": True, "database": "ok", "schema_up_to_date": True}
     assert c.get("/admin/readiness").status_code == 401
     d = c.get("/admin/readiness", headers={"Authorization": "Bearer adm"}).json()
-    assert d["schema"]["current"] == d["schema"]["head"] == "0009_knowledge_domain"
+    assert d["schema"]["current"] == d["schema"]["head"] == "0011_trainee_training_variables"
     assert "queues" in d and "features" in d
     text = json.dumps(d)
     for secret in ("adm", "hook", SECRET):

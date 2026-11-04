@@ -58,7 +58,7 @@ def test_existing_create_all_database_keeps_its_rows(tmp_path):
     with make_engine(url).connect() as c:
         assert c.execute(sa.text("SELECT name FROM call_attempts WHERE attempt_id='att-old'")).scalar() == "Old Lead"
         assert c.execute(sa.text("SELECT value FROM settings WHERE key='stopped'")).scalar() == "1"
-        assert c.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0009_knowledge_domain"
+        assert c.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0011_trainee_training_variables"
     init_db(url)  # running again is a no-op
 
 

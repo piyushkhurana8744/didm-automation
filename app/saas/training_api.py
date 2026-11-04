@@ -1,5 +1,6 @@
 """HTTP API for training sessions, usage, limits and trainee phone numbers."""
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -56,6 +57,10 @@ class StartIn(BaseModel):
     recording_consent_version: str | None = Field(default=None, max_length=64)
     # The practice-call notice version the trainee accepted; required when the organization has a notice
     practice_notice_version: str | None = Field(default=None, max_length=64)
+    # Lead name / caller persona name passed to Sarvam agent prompt
+    lead_name: str | None = Field(default=None, max_length=100)
+    # Additional custom agent variables
+    custom_variables: dict[str, Any] | None = Field(default=None)
 
 
 class BrowserAuthorizeIn(BaseModel):
@@ -125,7 +130,9 @@ def build_training_router(engine) -> APIRouter:
         try:
             sess, replayed = engine.request_session(db, db.merge(ctx.org), db.merge(ctx.user), db.merge(ctx.membership),
                                                     body.agent_id, body.channel, body.scenario_id,
-                                                    body.client_request_id)
+                                                    body.client_request_id,
+                                                    lead_name=body.lead_name,
+                                                    custom_variables=body.custom_variables)
         except TrainingError as e:
             fail(e)
         if not replayed and notice:

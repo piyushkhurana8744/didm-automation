@@ -2,15 +2,16 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useRef, useState, useEffect, type FormEvent, type ReactNode } from 'react';
 import { api, errorCode, errorMessage, isApiError } from '@/lib/api';
 import { CHANNEL_LABELS, DIFFICULTY_LABELS, orgPath } from '@/lib/agents';
 import { newRequestId, shortPhone } from '@/lib/training';
 import type { MyAgentDetail, StartedSession, TrainingAvailability } from '@/lib/types';
 import { useLoad } from '@/lib/useLoad';
+import { useSession } from '@/lib/session';
 import { Button } from '../Button';
 import { ErrorState } from '../ErrorState';
-import { CheckboxField, SelectField } from '../Field';
+import { CheckboxField, SelectField, TextField } from '../Field';
 import { SkeletonRows } from '../Spinner';
 
 interface ChannelState {
@@ -48,11 +49,46 @@ function phoneState(a: TrainingAvailability): ChannelState {
   };
 }
 
+function parseExtraParams(input: string): Record<string, string> {
+  const trimmed = input.trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === 'object' && parsed !== null) {
+        return Object.fromEntries(Object.entries(parsed).map(([k, v]) => [String(k), String(v)]));
+      }
+    } catch {
+      // fallback
+    }
+  }
+  const result: Record<string, string> = {};
+  for (const line of trimmed.split('\n')) {
+    const idx = line.indexOf('=');
+    if (idx > 0) {
+      const k = line.slice(0, idx).trim();
+      const v = line.slice(idx + 1).trim();
+      if (k) result[k] = v;
+    }
+  }
+  return result;
+}
+
 /** Scenario picker, honest channel states and the "Start phone practice" button for one assigned agent. */
 export function StartPractice({ orgId, agent }: { orgId: string; agent: MyAgentDetail }) {
   const router = useRouter();
+  const { me } = useSession();
   const availability = useLoad(() => api.get<TrainingAvailability>(orgPath(orgId, '/training/availability')), orgId);
   const [scenarioId, setScenarioId] = useState(agent.scenarios[0]?.id ?? '');
+  const [leadName, setLeadName] = useState(me?.user?.name || '');
+  const [extraParams, setExtraParams] = useState('');
+
+  useEffect(() => {
+    if (me?.user?.name && !leadName) {
+      setLeadName(me.user.name);
+    }
+  }, [me?.user?.name]);
+
   // Recording needs the trainee's say-so every time: the box starts unticked.
   const [recordConsent, setRecordConsent] = useState(false);
   // The practice call notice must be accepted before every call; the box starts unticked too.
@@ -82,10 +118,13 @@ export function StartPractice({ orgId, agent }: { orgId: string; agent: MyAgentD
     setBusy(true);
     requestId.current ??= newRequestId();
     try {
+      const parsedExtra = parseExtraParams(extraParams);
       const started = await api.post<StartedSession>(orgPath(orgId, '/training/sessions'), {
         agent_id: agent.id,
         channel: 'phone',
         scenario_id: scenarioId || null,
+        lead_name: leadName.trim() || undefined,
+        custom_variables: Object.keys(parsedExtra).length > 0 ? parsedExtra : undefined,
         client_request_id: requestId.current,
         ...(notice ? { practice_notice_version: notice.version } : {}),
         ...(recording && recordConsent ? { recording_consent_version: recording.consent_version } : {}),
@@ -137,6 +176,13 @@ export function StartPractice({ orgId, agent }: { orgId: string; agent: MyAgentD
 
       {offersPhone && (
         <form className="start-form" onSubmit={onStart} noValidate>
+          <TextField
+            label="Lead Name (Call Greeting Name)"
+            value={leadName}
+            onChange={(e) => setLeadName(e.target.value)}
+            placeholder="e.g. Piyush / Rahul Sharma"
+            hint="Agent will call you and address you by this name (passed as lead_name parameter)."
+          />
           {agent.scenarios.length > 0 && (
             <SelectField
               label="Scenario"
@@ -146,6 +192,18 @@ export function StartPractice({ orgId, agent }: { orgId: string; agent: MyAgentD
               hint="The situation the agent will play out with you."
             />
           )}
+          <details className="consent" style={{ cursor: 'pointer', padding: '0.5rem 0.75rem' }}>
+            <summary className="small muted">Additional custom parameters (optional)</summary>
+            <div style={{ marginTop: '0.75rem' }}>
+              <TextField
+                label="Extra parameters (key=value, or JSON)"
+                value={extraParams}
+                onChange={(e) => setExtraParams(e.target.value)}
+                placeholder="city=Delhi"
+                hint="Pass any extra custom variables to Sarvam agent (e.g. city=Delhi, course=Digital Marketing)."
+              />
+            </div>
+          </details>
           {notice && (
             <div className="consent">
               <p className="small consent-text pre-line">{notice.text}</p>

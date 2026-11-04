@@ -220,7 +220,9 @@ class TrainingEngine:
 
     # ---------- start ----------
     def request_session(self, db: Session, org: Organization, user: User, membership: Membership, agent_id: str,
-                        channel: str, scenario_id: str | None, client_request_id: str | None) -> tuple[TrainingSession, bool]:
+                        channel: str, scenario_id: str | None, client_request_id: str | None,
+                        lead_name: str | None = None,
+                        custom_variables: dict | None = None) -> tuple[TrainingSession, bool]:
         """Checks everything, reserves capacity and creates the session in state requested.
         Returns (session, replayed). replayed is True when client_request_id matched an earlier request."""
         if client_request_id:
@@ -262,20 +264,23 @@ class TrainingEngine:
             TraineeAgentTrainingProfile.organization_id == org.id,
             TraineeAgentTrainingProfile.user_id == user.id,
             TraineeAgentTrainingProfile.agent_id == ent.agent.id)).first()
-        reserved = {"agent_name", "user_name", "trainee_name", "trainee_training_context", "user_training_context"}
+        reserved = {"agent_name", "user_name", "trainee_name", "lead_name", "student_name", "customer_name", "name",
+                    "trainee_training_context", "user_training_context"}
         if personal:
             variables.update({k: v for k, v in (personal.variable_values or {}).items()
                               if k in schema_names and k not in reserved})
         # Sarvam rejects undeclared agent variables. Inject runtime identity only when this
         # particular published agent version declares the matching variable locally as well. Old
         # DIDM registrations predate local schemas and use the established `lead_name` contract.
-        user_name = (user.name or "").strip() or user.email.split("@", 1)[0]
-        for key, value in runtime_identity_variables(schema_names, user_name, ent.agent.name).items():
-            # An explicit scenario/persona value is intentional and wins over the signed-in identity.
-            variables.setdefault(key, value)
-        problems = variables_problems(schema, variables, require_all=True)
-        if problems:
-            raise TrainingError(422, "invalid_variables", "This scenario no longer matches the agent: " + " ".join(problems))
+        user_name = (lead_name or "").strip() or (user.name or "").strip() or user.email.split("@", 1)[0]
+        org_training = (org.settings or {}).get("training") or {}
+        configured_name_variable = str(org_training.get("sarvam_name_variable") or "").strip()
+        runtime_identity = ({configured_name_variable: user_name} if configured_name_variable
+                            else runtime_identity_variables(schema_names, user_name, ent.agent.name))
+        if schema_names and (not configured_name_variable or configured_name_variable in schema_names):
+            for key, value in runtime_identity.items():
+                # An explicit scenario/persona value is intentional and wins over the signed-in identity.
+                variables.setdefault(key, value)
         if personal:
             parts = []
             if (personal.instructions or "").strip():
@@ -292,6 +297,29 @@ class TrainingEngine:
                     variables["trainee_training_context"] = context
                 if "user_training_context" in schema_names:
                     variables["user_training_context"] = context
+        problems = variables_problems(schema, variables, require_all=True)
+        if problems:
+            raise TrainingError(422, "invalid_variables", "This scenario no longer matches the agent: " + " ".join(problems))
+        if configured_name_variable and configured_name_variable not in schema_names:
+            # The organization admin entered the exact provider-side variable. Local schemas can be
+            # absent/stale, so trust this explicit mapping and add it after local scenario validation.
+            variables[configured_name_variable] = user_name
+        elif not schema_names:
+            # The old DIDM agent was registered before schemas were stored locally. Its existing
+            # outbound contract declares `lead_name` at Sarvam, so add it only after local validation.
+            variables.update(runtime_identity)
+            variables["lead_name"] = user_name
+
+        if lead_name:
+            variables["lead_name"] = lead_name.strip()
+            for alias in ("name", "student_name", "customer_name", "user_name"):
+                if alias in schema_names:
+                    variables[alias] = lead_name.strip()
+
+        if custom_variables and isinstance(custom_variables, dict):
+            for k, v in custom_variables.items():
+                if isinstance(k, str) and k.strip():
+                    variables[k.strip()] = str(v)
         phone = None
         if channel == "phone":
             phone = user.phone_e164

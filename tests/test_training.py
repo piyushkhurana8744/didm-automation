@@ -137,6 +137,38 @@ def test_phone_session_starts_with_pinned_version_and_training_webhook(tw):
         assert res.status == "confirmed" and res.reserved_seconds == 600
 
 
+def test_custom_lead_name_and_variables_passed_to_sarvam(tw):
+    a = tw.a
+    res = a.t1.post(f"{a.base}/training/sessions", json={
+        "agent_id": a.agent,
+        "channel": "phone",
+        "scenario_id": a.scn,
+        "lead_name": "Piyush Khurana",
+        "custom_variables": {"city": "Delhi", "budget": "50000"}
+    }, headers={"X-CSRF-Token": a.t1.c.cookies.get("didm_csrf")})
+    assert res.status_code == 201, res.text
+    call = tw.eng.sarvam.calls[-1]
+    assert call["variables"]["lead_name"] == "Piyush Khurana"
+    assert call["variables"]["student_name"] == "Piyush Khurana"
+    assert call["variables"]["city"] == "Delhi"
+    assert call["variables"]["budget"] == "50000"
+
+
+def test_org_admin_selects_exact_sarvam_name_variable(tw):
+    a = tw.a
+    def put(who, name):
+        return who.c.put(f"{a.base}/training/sarvam-name-variable", json={"name": name},
+                         headers={"X-CSRF-Token": who.c.cookies.get("didm_csrf")})
+    saved = put(a.owner, "contact_name")
+    assert saved.status_code == 200 and saved.json() == {"name": "contact_name"}
+    assert a.owner.get(f"{a.base}/training/sarvam-name-variable").json() == {"name": "contact_name"}
+    response = start(a, a.t1)
+    assert response.status_code == 201, response.text
+    assert tw.eng.sarvam.calls[-1]["variables"]["contact_name"] == "t1@alpha.in"
+    assert put(a.t1, "hacked").status_code == 403
+    assert put(a.owner, "Bad Name").status_code == 422
+
+
 def test_new_published_version_does_not_change_existing_session(tw):
     a = tw.a
     sid = start(a, a.t1).json()["id"]

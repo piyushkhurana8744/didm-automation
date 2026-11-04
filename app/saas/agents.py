@@ -551,6 +551,10 @@ class MyTrainingTranscriptIn(BaseModel):
     session_id: str = Field(max_length=36)
 
 
+class SarvamNameVariableIn(BaseModel):
+    name: str = Field(default="", max_length=64)
+
+
 class AssignIn(BaseModel):
     agent_ids: list[str] = Field(min_length=1, max_length=50)
     user_ids: list[str] = Field(default_factory=list, max_length=MAX_BULK)
@@ -705,6 +709,32 @@ def build_agents_router() -> APIRouter:
         return {"ok": True}
 
     # ---------- agents ----------
+    @r.get("/training/sarvam-name-variable")
+    def get_sarvam_name_variable(ctx: OrgContext = Depends(org_access("org.view"))):
+        training = (ctx.org.settings or {}).get("training") or {}
+        return {"name": str(training.get("sarvam_name_variable") or "")}
+
+    @r.put("/training/sarvam-name-variable")
+    def set_sarvam_name_variable(body: SarvamNameVariableIn, request: Request,
+                                 ctx: OrgContext = Depends(org_access("org.update")),
+                                 db: Session = Depends(get_db)):
+        name = body.name.strip()
+        if name and not VAR_NAME_RE.fullmatch(name):
+            raise HTTPException(status_code=422, detail="Use lower-case letters, digits and underscores; start with a letter or underscore.")
+        settings = dict(ctx.org.settings or {})
+        training = dict(settings.get("training") or {})
+        if name:
+            training["sarvam_name_variable"] = name
+        else:
+            training.pop("sarvam_name_variable", None)
+        settings["training"] = training
+        ctx.org.settings = settings
+        audit(db, request, "training.sarvam_name_variable_updated", actor=ctx.user,
+              organization_id=ctx.org.id, target_type="organization", target_id=ctx.org.id,
+              details={"name": name or None})
+        db.commit()
+        return {"name": name}
+
     @r.get("/integrations/sarvam/status")
     def sarvam_status(request: Request, ctx: OrgContext = Depends(org_access("agents.manage"))):
         from .sarvam_mcp import connection_status
