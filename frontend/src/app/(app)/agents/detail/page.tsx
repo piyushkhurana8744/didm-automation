@@ -33,7 +33,7 @@ function AgentDetailView({ membership, agentId, tab }: { membership: Membership;
     `${orgId}|${agentId}`,
   );
   const [notice, setNotice] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<'archive' | 'restore' | null>(null);
+  const [confirm, setConfirm] = useState<'archive' | 'restore' | 'delete' | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
 
@@ -61,6 +61,11 @@ function AgentDetailView({ membership, agentId, tab }: { membership: Membership;
     setConfirmBusy(true);
     setConfirmError(null);
     try {
+      if (confirm === 'delete') {
+        await api.delete(orgPath(orgId, `/agents/${seg(agentId)}`));
+        router.push('/agents/');
+        return;
+      }
       await api.post<Agent>(orgPath(orgId, `/agents/${seg(agentId)}/${confirm}`));
       setNotice(confirm === 'archive' ? 'The agent was archived.' : 'The agent was restored.');
       setConfirm(null);
@@ -92,27 +97,38 @@ function AgentDetailView({ membership, agentId, tab }: { membership: Membership;
         }
         actions={
           canManage ? (
-            agent.status === 'active' ? (
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              {agent.status === 'active' ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setConfirmError(null);
+                    setConfirm('archive');
+                  }}
+                >
+                  Archive agent
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setConfirmError(null);
+                    setConfirm('restore');
+                  }}
+                >
+                  Restore agent
+                </Button>
+              )}
               <Button
-                variant="secondary"
+                variant="danger"
                 onClick={() => {
                   setConfirmError(null);
-                  setConfirm('archive');
+                  setConfirm('delete');
                 }}
               >
-                Archive agent
+                Delete agent
               </Button>
-            ) : (
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setConfirmError(null);
-                  setConfirm('restore');
-                }}
-              >
-                Restore agent
-              </Button>
-            )
+            </div>
           ) : undefined
         }
       />
@@ -157,15 +173,19 @@ function AgentDetailView({ membership, agentId, tab }: { membership: Membership;
       </Tabs>
       <ConfirmDialog
         open={confirm !== null}
-        title={confirm === 'archive' ? 'Archive agent?' : 'Restore agent?'}
-        confirmLabel={confirm === 'archive' ? 'Archive' : 'Restore'}
-        danger={confirm === 'archive'}
+        title={confirm === 'delete' ? 'Delete agent permanently?' : confirm === 'archive' ? 'Archive agent?' : 'Restore agent?'}
+        confirmLabel={confirm === 'delete' ? 'Delete permanently' : confirm === 'archive' ? 'Archive' : 'Restore'}
+        danger={confirm === 'delete' || confirm === 'archive'}
         busy={confirmBusy}
         error={confirmError}
         onConfirm={() => void onConfirm()}
         onCancel={() => setConfirm(null)}
       >
-        {confirm === 'archive' ? (
+        {confirm === 'delete' ? (
+          <p>
+            Are you sure you want to permanently delete <strong>{agent.name}</strong>? This will remove the agent, its versions, scenarios, and practice history completely from this panel.
+          </p>
+        ) : confirm === 'archive' ? (
           <p>
             <strong>{agent.name}</strong> will be hidden from trainees and cannot be assigned or edited until it is restored. Its versions,
             scenarios and assignment history are kept. Nothing changes at Sarvam.

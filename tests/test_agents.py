@@ -473,3 +473,22 @@ def test_dialer_default_agent_unchanged(world):
     Sarvam(s, Client()).start_call("+911234567890", {}, {})
     assert sent["body"]["app_config"]["app_id"] == "default-app"
     assert sent["body"]["app_config"]["app_version"] == 7
+
+
+def test_delete_agent_cascade(world):
+    a = world.a
+    ag, v1 = publish_agent(a, "to-delete-app")
+    scenario(a, ag)
+    assign(a, a.owner, [ag], [a.user_id("trainee@alpha.in")])
+    
+    # Trainee cannot delete
+    assert a.trainee.delete(f"{a.base}/agents/{ag}").status_code == 403
+    
+    # Admin / Owner deletes successfully
+    res = a.owner.delete(f"{a.base}/agents/{ag}")
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    
+    # Agent no longer exists
+    assert a.owner.get(f"{a.base}/agents/{ag}").status_code == 404
+

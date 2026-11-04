@@ -14,14 +14,22 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import event, func, inspect, or_, select, update
+from sqlalchemy import delete, event, func, inspect, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import utcnow
 from .auth import OrgContext, audit, get_db, org_access, scoped_get
-from .models import (Agent, AgentAssignment, AgentVersion, Membership, Team, TeamMember, TraineeAgentTrainingProfile,
-                     TrainingScenario, TrainingSession, TrainingTranscript, TrainingTranscriptTurn, User)
+from .models import (
+    Agent, AgentAssignment, AgentValidationRun, AgentVersion, AgentVersionKnowledgeItem,
+    BrowserSessionToken, EvaluationJob, EvaluationUsage,
+    KnowledgeRetrievalEvent, KnowledgeSnapshot, KnowledgeSnapshotItem,
+    Membership, ProviderSync, RetrievalCredential, Team, TeamMember,
+    TraineeAgentTrainingProfile, TrainingEvaluation, TrainingRecording,
+    TrainingScenario, TrainingSession, TrainingSessionEvent,
+    TrainingTranscript, TrainingTranscriptTurn, TrainingUsageAdjustment,
+    TrainingUsageEvent, TrainingUsageReservation, User
+)
 from .permissions import ADMIN, RANK, can_assign_to
 
 PROVIDERS = ("sarvam",)
@@ -905,6 +913,58 @@ def build_agents_router() -> APIRouter:
                   target_id=a.id)
             db.commit()
         return agent_out(a)
+
+    @r.delete("/agents/{agent_id}")
+    def delete_agent(agent_id: str, request: Request, ctx: OrgContext = Depends(org_access("agents.manage")),
+                     db: Session = Depends(get_db)):
+        a = agent_for(db, ctx, agent_id)
+        name, provider_app_id = a.name, a.provider_app_id
+        
+        # 1. Sub-tables referencing training_sessions
+        sess_ids = select(TrainingSession.id).where(TrainingSession.agent_id == a.id)
+        tr_ids = select(TrainingTranscript.id).where(TrainingTranscript.session_id.in_(sess_ids))
+        db.execute(delete(TrainingTranscriptTurn).where(TrainingTranscriptTurn.transcript_id.in_(tr_ids)))
+        db.execute(delete(TrainingTranscript).where(TrainingTranscript.session_id.in_(sess_ids)))
+        db.execute(delete(TrainingRecording).where(TrainingRecording.session_id.in_(sess_ids)))
+        db.execute(delete(TrainingEvaluation).where(TrainingEvaluation.session_id.in_(sess_ids)))
+        db.execute(delete(EvaluationJob).where(EvaluationJob.session_id.in_(sess_ids)))
+        db.execute(delete(EvaluationUsage).where(EvaluationUsage.session_id.in_(sess_ids)))
+        db.execute(delete(BrowserSessionToken).where(BrowserSessionToken.session_id.in_(sess_ids)))
+        db.execute(delete(TrainingUsageEvent).where(TrainingUsageEvent.session_id.in_(sess_ids)))
+        db.execute(delete(TrainingUsageAdjustment).where(TrainingUsageAdjustment.session_id.in_(sess_ids)))
+        db.execute(delete(TrainingUsageReservation).where(TrainingUsageReservation.session_id.in_(sess_ids)))
+        db.execute(delete(TrainingSessionEvent).where(TrainingSessionEvent.session_id.in_(sess_ids)))
+        db.execute(delete(TrainingSession).where(TrainingSession.agent_id == a.id))
+
+        # 2. Sub-tables referencing agent_versions
+        ver_ids = select(AgentVersion.id).where(AgentVersion.agent_id == a.id)
+        db.execute(delete(KnowledgeRetrievalEvent).where(KnowledgeRetrievalEvent.agent_version_id.in_(ver_ids)))
+        db.execute(delete(RetrievalCredential).where(RetrievalCredential.agent_version_id.in_(ver_ids)))
+        db.execute(delete(ProviderSync).where(ProviderSync.agent_version_id.in_(ver_ids)))
+        db.execute(delete(AgentValidationRun).where(AgentValidationRun.agent_version_id.in_(ver_ids)))
+        db.execute(delete(AgentVersionKnowledgeItem).where(AgentVersionKnowledgeItem.agent_version_id.in_(ver_ids)))
+
+        snap_ids = select(KnowledgeSnapshot.id).where(KnowledgeSnapshot.agent_id == a.id)
+        db.execute(delete(KnowledgeSnapshotItem).where(KnowledgeSnapshotItem.snapshot_id.in_(snap_ids)))
+        db.execute(delete(KnowledgeSnapshot).where(KnowledgeSnapshot.agent_id == a.id))
+
+        # 3. Direct agent tables
+        db.execute(delete(TraineeAgentTrainingProfile).where(TraineeAgentTrainingProfile.agent_id == a.id))
+        db.execute(delete(AgentAssignment).where(AgentAssignment.agent_id == a.id))
+        db.execute(delete(TrainingScenario).where(TrainingScenario.agent_id == a.id))
+
+        # 4. Break circular FKs on agents and agent_versions
+        db.execute(update(Agent).where(Agent.id == a.id).values(published_version_id=None))
+        db.execute(update(AgentVersion).where(AgentVersion.agent_id == a.id).values(based_on_version_id=None))
+
+        # 5. Delete versions and agent
+        db.execute(delete(AgentVersion).where(AgentVersion.agent_id == a.id))
+        db.execute(delete(Agent).where(Agent.id == a.id))
+
+        audit(db, request, "agent.deleted", actor=ctx.user, organization_id=ctx.org.id, target_type="agent",
+              target_id=agent_id, details={"name": name, "provider_app_id": provider_app_id})
+        db.commit()
+        return {"ok": True, "deleted_id": agent_id}
 
     # ---------- versions ----------
     @r.get("/agents/{agent_id}/versions")

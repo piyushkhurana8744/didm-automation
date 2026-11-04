@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
-import { api } from '@/lib/api';
+import { api, errorMessage, seg } from '@/lib/api';
 import { channelList, orgPath, query } from '@/lib/agents';
 import { formatDate } from '@/lib/format';
 import type { AgentListItem, Membership, Page } from '@/lib/types';
 import { useLoad } from '@/lib/useLoad';
 import { Button, ButtonLink } from '@/components/Button';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { DataTable, type Column } from '@/components/DataTable';
 import { EmptyState } from '@/components/EmptyState';
 import { ErrorState } from '@/components/ErrorState';
@@ -27,6 +28,9 @@ function Agents({ membership }: { membership: Membership }) {
   const [category, setCategory] = useState('');
   const [applied, setApplied] = useState({ q: '', category: '' });
   const [offset, setOffset] = useState(0);
+  const [agentToDelete, setAgentToDelete] = useState<AgentListItem | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const key = `${orgId}|${status}|${applied.q}|${applied.category}|${offset}`;
   const { data, error, loading, reload } = useLoad(
     () => api.get<Page<AgentListItem>>(orgPath(orgId, `/agents${query({ status, q: applied.q, category: applied.category, limit: LIMIT, offset })}`)),
@@ -71,6 +75,35 @@ function Agents({ membership }: { membership: Membership }) {
     },
     { key: 'draft', header: 'Draft', render: (a) => (a.has_draft ? <span className="badge badge-info">Draft open</span> : '—') },
     { key: 'updated', header: 'Updated', render: (a) => formatDate(a.updated_at) },
+    ...(canManage
+      ? [
+          {
+            key: 'actions',
+            header: 'Actions',
+            render: (a: AgentListItem) => (
+              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                <Link
+                  href={`/agents/detail/?id=${encodeURIComponent(a.id)}`}
+                  className="button button-sm button-secondary"
+                  style={{ textDecoration: 'none', padding: '0.2rem 0.6rem' }}
+                >
+                  Edit
+                </Link>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={() => {
+                    setDeleteError(null);
+                    setAgentToDelete(a);
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            ),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -132,6 +165,35 @@ function Agents({ membership }: { membership: Membership }) {
           {data && <Pagination total={data.total} limit={LIMIT} offset={offset} onChange={setOffset} noun="agents" />}
         </>
       )}
+      <ConfirmDialog
+        open={agentToDelete !== null}
+        title="Delete agent permanently?"
+        confirmLabel="Delete permanently"
+        danger
+        busy={deleteBusy}
+        error={deleteError}
+        onConfirm={async () => {
+          if (!agentToDelete) return;
+          setDeleteBusy(true);
+          setDeleteError(null);
+          try {
+            await api.delete(orgPath(orgId, `/agents/${seg(agentToDelete.id)}`));
+            setAgentToDelete(null);
+            reload();
+          } catch (err) {
+            setDeleteError(errorMessage(err));
+          } finally {
+            setDeleteBusy(false);
+          }
+        }}
+        onCancel={() => {
+          if (!deleteBusy) setAgentToDelete(null);
+        }}
+      >
+        <p>
+          Are you sure you want to permanently delete <strong>{agentToDelete?.name}</strong>? This will remove the agent, its versions, and practice data completely from the panel.
+        </p>
+      </ConfirmDialog>
     </>
   );
 }
