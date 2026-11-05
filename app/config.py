@@ -158,6 +158,9 @@ class Settings:
     training_default_sessions_per_day: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_SESSIONS_PER_DAY", 10000))
     training_default_session_minutes: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_SESSION_MINUTES", 60))
     training_default_monthly_minutes: int = field(default_factory=lambda: _int("TRAINING_DEFAULT_MONTHLY_MINUTES", 1_000_000))
+    # Explicit testing escape hatch: bypass quota/capacity 429s while retaining the per-user open-session
+    # guard. Keep false in production because phone calls are billable at the provider.
+    training_test_unlimited: bool = field(default_factory=lambda: _bool("TRAINING_TEST_UNLIMITED", False))
     # A session that has not reached the provider within this many seconds is failed and its capacity freed
     training_start_timeout_seconds: int = field(default_factory=lambda: _int("TRAINING_START_TIMEOUT_SECONDS", 120))
     # Extra wait for the provider's final result after the longest allowed session, before timing it out

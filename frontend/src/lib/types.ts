@@ -401,7 +401,7 @@ export interface MyAgentDetail extends MyAgent {
 
 export interface MyAgentTrainingSource {
   id: string;
-  kind: 'text' | 'pdf' | 'transcript';
+  kind: 'text' | 'pdf' | 'image' | 'transcript';
   title: string;
   text: string;
   created_at: string;

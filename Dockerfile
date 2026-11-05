@@ -11,7 +11,9 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /srv
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && useradd --system --uid 10001 --no-create-home app \
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir -r requirements.txt && useradd --system --uid 10001 --no-create-home app \
     && chown app /srv  # only the directory, so a local SQLite file can be created; code stays root-owned
 COPY app ./app
 COPY alembic.ini ./

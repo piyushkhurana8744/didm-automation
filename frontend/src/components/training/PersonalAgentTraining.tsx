@@ -26,13 +26,17 @@ export function PersonalAgentTraining({ orgId, agentId, variableSchema }: { orgI
     () => api.get<Page<TrainingSession>>(orgPath(orgId, '/my/training/sessions?limit=100')),
     `${orgId}|${agentId}|personal-training-sessions`,
   );
+  const delivery = useLoad(
+    () => api.get<{ name: string }>(orgPath(orgId, '/training/sarvam-context-variable')),
+    `${orgId}|knowledge-delivery`,
+  );
   const [instructions, setInstructions] = useState<string | null>(null);
   const [variableValues, setVariableValues] = useState<Record<string, string> | null>(null);
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [dragging, setDragging] = useState(false);
-  const [busy, setBusy] = useState<'save' | 'text' | 'pdf' | 'transcript' | 'delete' | null>(null);
+  const [busy, setBusy] = useState<'save' | 'text' | 'pdf' | 'image' | 'transcript' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -42,6 +46,8 @@ export function PersonalAgentTraining({ orgId, agentId, variableSchema }: { orgI
   if (!data) return null;
   const value = instructions ?? data.instructions;
   const editableVariables = variableSchema.filter((x) => !RESERVED.has(x.name));
+  const deliveryReady = Boolean(delivery.data?.name || variableSchema.some((x) =>
+    x.name === 'trainee_training_context' || x.name === 'user_training_context'));
   const values = variableValues ?? Object.fromEntries(editableVariables.map((x) => [x.name, String(data.variable_values[x.name] ?? '')]));
   const ownSessions = (sessions.data?.items ?? []).filter((x) => x.agent_id === agentId && x.status === 'completed');
   const resetMessages = () => { setError(null); setNotice(null); };
@@ -59,7 +65,8 @@ export function PersonalAgentTraining({ orgId, agentId, variableSchema }: { orgI
         else typedValues[item.name] = raw;
       });
       await api.put(orgPath(orgId, base), { instructions: value, variable_values: typedValues });
-      setInstructions(null); setVariableValues(null); setNotice('Your personal agent instructions and variables were saved.'); profile.reload();
+      setInstructions(null); setVariableValues(null);
+      setNotice('Instructions saved and ready for your next call.'); profile.reload();
     } catch (err) { setError(errorMessage(err)); } finally { setBusy(null); }
   }
 
@@ -76,13 +83,18 @@ export function PersonalAgentTraining({ orgId, agentId, variableSchema }: { orgI
     const extension = file.name.split('.').pop()?.toLowerCase();
     const isPdf = file.type === 'application/pdf' || extension === 'pdf';
     const isText = file.type.startsWith('text/') || extension === 'txt' || extension === 'md';
-    if (!isPdf && !isText) return setError('Use a PDF, TXT or Markdown file. Images need OCR and are not supported yet.');
+    const isImage = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
+      || ['jpg', 'jpeg', 'png', 'webp'].includes(extension ?? '');
+    if (!isPdf && !isText && !isImage) return setError('Use a PDF, image, TXT or Markdown file.');
     if (file.size > 5_000_000) return setError('Choose a file no larger than 5 MB.');
-    setBusy(isPdf ? 'pdf' : 'text');
+    setBusy(isPdf ? 'pdf' : isImage ? 'image' : 'text');
     try {
       if (isPdf) {
         await api.post(orgPath(orgId, `${base}/pdf`), { filename: file.name, content_base64: bytesToBase64(await file.arrayBuffer()) });
         setNotice('PDF ready. Its extracted text will be sent to Sarvam on your next call.');
+      } else if (isImage) {
+        await api.post(orgPath(orgId, `${base}/image`), { filename: file.name, content_base64: bytesToBase64(await file.arrayBuffer()) });
+        setNotice('Image ready. Its detected text will be sent to Sarvam on your next call.');
       } else {
         const content = (await file.text()).trim();
         if (!content) { setError('This text file is empty.'); return; }
@@ -125,7 +137,8 @@ export function PersonalAgentTraining({ orgId, agentId, variableSchema }: { orgI
   return <section className="panel" aria-labelledby="personal-agent-training">
     <h2 id="personal-agent-training" className="panel-title">Train your assigned agent</h2>
     <p className="muted">These instructions and sources apply only to your calls with this assigned agent. They do not change anyone else&apos;s agent.</p>
-    <p className="field-hint">At call start, DIDM sends these instructions and extracted sources through the Sarvam training-context variable configured by your organization owner. The Sarvam agent prompt must reference that variable.</p>
+    <p className="field-hint">Add what the agent should know or how it should behave. DIDM prepares and sends it automatically when a new call starts.</p>
+    {!deliveryReady && !delivery.loading && <div className="alert alert-warn"><strong>Saved content is waiting for one-time agent setup.</strong> An organization owner needs to connect knowledge delivery before calls can use it.</div>}
     <FormError message={error} /><FormSuccess message={notice} />
     <form className="form form-wide" onSubmit={saveInstructions}>
       <TextAreaField label="Personal agent instructions" rows={6} maxLength={10000} value={value} onChange={(e) => setInstructions(e.target.value)} hint="Tell the agent how to behave with you, what to practise and which language or difficulty to use." />
@@ -168,9 +181,9 @@ export function PersonalAgentTraining({ orgId, agentId, variableSchema }: { orgI
         onDrop={(e) => void dropFile(e)}
       >
         <span className="knowledge-dropzone-icon" aria-hidden="true">↑</span>
-        <strong>{busy === 'pdf' ? 'Reading PDF…' : 'Drop a PDF, TXT or Markdown file here'}</strong>
+        <strong>{busy === 'pdf' ? 'Reading PDF…' : busy === 'image' ? 'Reading image text…' : 'Drop a PDF, image, TXT or Markdown file here'}</strong>
         <span className="field-hint">or click to choose · maximum 5 MB</span>
-        <input className="sr-only" type="file" accept="application/pdf,text/plain,text/markdown,.pdf,.txt,.md" disabled={busy !== null} onChange={(e) => void uploadFile(e)} />
+        <input className="sr-only" type="file" accept="application/pdf,image/jpeg,image/png,image/webp,text/plain,text/markdown,.pdf,.jpg,.jpeg,.png,.webp,.txt,.md" disabled={busy !== null} onChange={(e) => void uploadFile(e)} />
       </label>
       <div className="knowledge-divider"><span>or paste text</span></div>
       <form className="form form-wide" onSubmit={addText}>
@@ -186,7 +199,7 @@ export function PersonalAgentTraining({ orgId, agentId, variableSchema }: { orgI
       ]} />
       <Button variant="secondary" busy={busy === 'transcript'} disabled={busy !== null || !sessionId} onClick={() => void importTranscript()}>Add transcript</Button>
     </div>
-    <h3>Ready for the next call <span className="badge badge-ok">{data.sources.length}</span></h3>
+    <h3>{deliveryReady ? 'Ready for the next call' : 'Saved — waiting for agent setup'} <span className={`badge ${deliveryReady ? 'badge-ok' : 'badge-warn'}`}>{data.sources.length}</span></h3>
     {data.sources.length === 0 ? <EmptyState title="No personal training sources yet." /> : <ul className="card-list">
       {data.sources.map((source) => <li className="card" key={source.id}><div className="card-main">
         <h4 className="card-title">{source.title}</h4><p className="card-meta"><span className="badge">{source.kind}</span> · {source.text.length.toLocaleString()} characters</p>

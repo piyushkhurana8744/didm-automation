@@ -120,7 +120,8 @@ def build_training_router(engine) -> APIRouter:
         """Starts a training session for the caller. Everything that decides what is called (agent
         version, provider app, number, variables) is resolved here on the server."""
         limiter = request.app.state.limiter
-        limiter.check(f"training-start:{ctx.user.id}", 1000, 3600)
+        if not engine.s.training_test_unlimited:
+            limiter.check(f"training-start:{ctx.user.id}", 1000, 3600)
         st = db.get(TrainingOrgSettings, ctx.org.id)
         notice = st.practice_notice_version if st else None
         if notice and body.practice_notice_version != notice:

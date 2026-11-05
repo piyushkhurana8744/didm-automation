@@ -555,6 +555,11 @@ class MyTrainingPdfIn(BaseModel):
     content_base64: str = Field(min_length=1, max_length=7_000_000)
 
 
+class MyTrainingImageIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=200)
+    content_base64: str = Field(min_length=1, max_length=7_000_000)
+
+
 class MyTrainingTranscriptIn(BaseModel):
     session_id: str = Field(max_length=36)
 
@@ -746,7 +751,8 @@ def build_agents_router() -> APIRouter:
     @r.get("/training/sarvam-context-variable")
     def get_sarvam_context_variable(ctx: OrgContext = Depends(org_access("org.view"))):
         training = (ctx.org.settings or {}).get("training") or {}
-        return {"name": str(training.get("sarvam_context_variable") or "")}
+        name = str(training.get("sarvam_context_variable") or "")
+        return {"name": "lead_note" if name == "trainee_training_context" else name}
 
     @r.put("/training/sarvam-context-variable")
     def set_sarvam_context_variable(body: SarvamNameVariableIn, request: Request,
@@ -1530,6 +1536,42 @@ def build_agents_router() -> APIRouter:
                                  "sha256": hashlib.sha256(raw).hexdigest(), "created_at": iso(utcnow())})
         audit(db, request, "trainee.agent_training_source_added", actor=ctx.user, organization_id=ctx.org.id,
               target_type="agent", target_id=agent_id, details={"kind": "pdf", "size_bytes": len(raw)})
+        db.commit()
+        return profile_out(row)
+
+    @r.post("/my/agents/{agent_id}/training-profile/image", status_code=201)
+    def add_my_training_image(agent_id: str, body: MyTrainingImageIn, request: Request,
+                              ctx: OrgContext = Depends(org_access("training.self")), db: Session = Depends(get_db)):
+        """Extract English/Hindi text from a bounded raster image; the original image is never stored."""
+        row = my_training_profile(db, ctx, agent_id, create=True)
+        try:
+            raw = base64.b64decode(body.content_base64, validate=True)
+        except Exception:
+            raise HTTPException(status_code=422, detail="The image upload is not valid base64.")
+        if len(raw) > 5_000_000:
+            raise HTTPException(status_code=422, detail="Upload an image no larger than 5 MB.")
+        try:
+            from PIL import Image, ImageOps
+            import pytesseract
+            image = Image.open(io.BytesIO(raw))
+            image.verify()
+            image = Image.open(io.BytesIO(raw))
+            if image.format not in ("JPEG", "PNG", "WEBP"):
+                raise ValueError("unsupported format")
+            if image.width * image.height > 20_000_000:
+                raise ValueError("too many pixels")
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            extracted = pytesseract.image_to_string(image, lang="eng+hin", config="--psm 6").strip()
+        except Exception:
+            raise HTTPException(status_code=422, detail="This image could not be read. Upload a clear JPG, PNG or WebP image containing text.")
+        if not extracted:
+            raise HTTPException(status_code=422, detail="No readable text was found. Try a sharper, straight image with better lighting.")
+        extracted = extracted[:30_000]
+        digest = hashlib.sha256(raw).hexdigest()
+        add_profile_source(row, {"id": digest[:24], "kind": "image", "title": body.filename.strip(),
+                                 "text": extracted, "sha256": digest, "created_at": iso(utcnow())})
+        audit(db, request, "trainee.agent_training_source_added", actor=ctx.user, organization_id=ctx.org.id,
+              target_type="agent", target_id=agent_id, details={"kind": "image", "size_bytes": len(raw)})
         db.commit()
         return profile_out(row)
 

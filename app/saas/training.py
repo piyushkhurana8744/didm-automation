@@ -31,16 +31,25 @@ log = logging.getLogger("didm.training")
 
 def personal_training_context(profile, limit: int = 12_000) -> str:
     """Render text-only Sarvam context while preserving each source's detected type and title."""
-    parts = []
+    parts = [
+        "HIGHEST PRIORITY — LATEST CALL-SPECIFIC CONTEXT\n"
+        "Use the facts below for this call. They override conflicting dates, timings, venues, prices, "
+        "or event details from the base prompt, older notes, and knowledge bases. Never replace an exact "
+        "date below with 'today' or another inferred date. If two sources conflict, the first source below "
+        "is the newest and wins."
+    ]
     if profile and (profile.instructions or "").strip():
         parts.append("CONTENT TYPE: INSTRUCTIONS\n" + profile.instructions.strip())
-    for source in (profile.sources or []) if profile else []:
+    # Sources are append-only in the profile. Send newest first so corrections survive the context cap
+    # and have deterministic precedence over older material that the trainee has not removed yet.
+    for position, source in enumerate(reversed((profile.sources or []) if profile else [])):
         value = str(source.get("text") or "").strip()
         if not value:
             continue
         kind = str(source.get("kind") or "text").strip().upper()
         title = str(source.get("title") or "Training material").strip()
-        parts.append(f"SOURCE: {title}\nSOURCE TYPE: {kind}\nCONTENT:\n{value}")
+        priority = "NEWEST SOURCE — USE THIS ON CONFLICT" if position == 0 else "OLDER SUPPORTING SOURCE"
+        parts.append(f"SOURCE PRIORITY: {priority}\nSOURCE: {title}\nSOURCE TYPE: {kind}\nCONTENT:\n{value}")
     return "\n\n---\n\n".join(parts)[:limit]
 
 
@@ -291,6 +300,12 @@ class TrainingEngine:
         org_training = (org.settings or {}).get("training") or {}
         configured_name_variable = str(org_training.get("sarvam_name_variable") or "").strip()
         configured_context_variable = str(org_training.get("sarvam_context_variable") or "").strip()
+        # The first UI rollout suggested this alias before existing Sarvam agents were inventoried.
+        # Those agents expose `lead_note`; normalize the stale value when the local schema cannot
+        # prove that the temporary alias really exists.
+        if (configured_context_variable == "trainee_training_context"
+                and "trainee_training_context" not in schema_names):
+            configured_context_variable = "lead_note"
         runtime_identity = ({configured_name_variable: user_name} if configured_name_variable
                             else runtime_identity_variables(schema_names, user_name, ent.agent.name))
         if schema_names and (not configured_name_variable or configured_name_variable in schema_names):
@@ -300,6 +315,12 @@ class TrainingEngine:
         if personal:
             context = personal_training_context(personal)
             if context:
+                if not configured_context_variable and not ({"trainee_training_context", "user_training_context"} & schema_names):
+                    raise TrainingError(
+                        409, "knowledge_parameter_missing",
+                        "Your knowledge is saved but this agent is not connected for knowledge delivery yet. "
+                        "Ask an organization owner to finish the one-time Sarvam knowledge setup."
+                    )
                 # The provider agent must declare and reference one of these variables. Never send an
                 # undeclared alias: Sarvam rejects the whole outbound request with HTTP 422.
                 if "trainee_training_context" in schema_names:
@@ -336,9 +357,17 @@ class TrainingEngine:
                     variables[alias] = lead_name.strip()
 
         if custom_variables and isinstance(custom_variables, dict):
+            protected_runtime_variables = {
+                "agent_name", "user_name", "trainee_name", "lead_name", "student_name", "customer_name", "name",
+                "trainee_training_context", "user_training_context", configured_name_variable,
+                configured_context_variable,
+            }
             for k, v in custom_variables.items():
-                if isinstance(k, str) and k.strip():
-                    variables[k.strip()] = str(v)
+                name = k.strip() if isinstance(k, str) else ""
+                # Identity and knowledge values are server-derived. A blank/manual value from the
+                # optional UI must never erase the context DIDM prepared for this call.
+                if name and name not in protected_runtime_variables:
+                    variables[name] = str(v)
         phone = None
         if channel == "phone":
             phone = user.phone_e164
@@ -397,6 +426,15 @@ class TrainingEngine:
     def _check_capacity(self, db: Session, limits: EffectiveLimits, org_id: str, user_id: str, ent,
                         max_seconds: int, now: datetime):
         """Runs under capacity_lock. Organization caps always apply; assignment limits only narrow them."""
+        if self.s.training_test_unlimited:
+            # Unlimited testing removes every 429 quota/capacity gate. Still refuse a duplicate call
+            # when this person already has as many open sessions as their concurrency setting permits.
+            open_user = db.scalar(select(func.count(TrainingSession.id)).where(
+                TrainingSession.organization_id == org_id, TrainingSession.user_id == user_id,
+                TrainingSession.status.in_(OPEN_SESSION_STATUSES))) or 0
+            if open_user >= max(1, limits.user_concurrency):
+                raise TrainingError(409, "user_concurrency", "You already have a training session in progress.")
+            return
         open_all = db.scalar(select(func.count(TrainingSession.id)).where(
             TrainingSession.status.in_(OPEN_SESSION_STATUSES))) or 0
         if open_all >= limits.platform_concurrency:

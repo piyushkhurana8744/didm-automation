@@ -185,16 +185,43 @@ def test_org_admin_maps_personal_material_to_exact_sarvam_context_variable(tw):
                         headers=trainee_csrf)
     assert added.status_code == 201, added.text
 
-    response = start(a, a.t1)
+    response = a.t1.post(f"{a.base}/training/sessions", {
+        "agent_id": a.agent, "channel": "phone", "scenario_id": a.scn,
+        "custom_variables": {"call_training_material": "", "lead_name": "wrong"},
+    })
     assert response.status_code == 201, response.text
     context = tw.eng.sarvam.calls[-1]["variables"]["call_training_material"]
+    assert context.startswith("HIGHEST PRIORITY")
+    assert "NEWEST SOURCE — USE THIS ON CONFLICT" in context
     assert "SOURCE: Course facts" in context
     assert "SOURCE TYPE: TEXT" in context
     assert "The approved fee is 50000." in context
+    protected = tw.eng.sarvam.calls[-1]["variables"]
+    assert "The approved fee is 50000." in protected["call_training_material"]
+    assert protected.get("lead_name") != "wrong"
     assert a.t1.c.put(f"{a.base}/training/sarvam-context-variable",
                       json={"name": "hacked"}, headers=trainee_csrf).status_code == 403
     assert a.owner.c.put(f"{a.base}/training/sarvam-context-variable",
                          json={"name": "Bad Name"}, headers=csrf).status_code == 422
+
+
+def test_legacy_training_context_setting_uses_standard_lead_note(tw):
+    a = tw.a
+    csrf = {"X-CSRF-Token": a.owner.c.cookies.get("didm_csrf")}
+    saved = a.owner.c.put(f"{a.base}/training/sarvam-context-variable",
+                          json={"name": "trainee_training_context"}, headers=csrf)
+    assert saved.status_code == 200
+    assert a.owner.get(f"{a.base}/training/sarvam-context-variable").json() == {"name": "lead_note"}
+    trainee_csrf = {"X-CSRF-Token": a.t1.c.cookies.get("didm_csrf")}
+    added = a.t1.c.post(f"{a.base}/my/agents/{a.agent}/training-profile/text",
+                        json={"title": "Bhandara", "text": "Bhandara is on 20 November 2026."},
+                        headers=trainee_csrf)
+    assert added.status_code == 201
+    response = start(a, a.t1)
+    assert response.status_code == 201, response.text
+    variables = tw.eng.sarvam.calls[-1]["variables"]
+    assert "Bhandara is on 20 November 2026." in variables["lead_note"]
+    assert "trainee_training_context" not in variables
 
 
 def test_new_published_version_does_not_change_existing_session(tw):
@@ -409,6 +436,15 @@ def test_daily_and_monthly_limits(tw):
     usage = a.owner.get(f"{a.base}/training/usage").json()
     assert usage["billable_minutes"] == 1.6 and usage["connected_sessions"] == 1
     assert a.t1.get(f"{a.base}/training/usage").status_code == 403
+
+
+def test_unlimited_testing_bypasses_429_quotas(tw):
+    a = tw.a
+    tw.settings.training_test_unlimited = True
+    set_limits(tw, a, max_sessions_per_user_per_day=0, monthly_minutes=0,
+               max_concurrent_sessions=0)
+    response = start(a, a.t1)
+    assert response.status_code == 201, response.text
 
 
 def test_assignment_limit_cannot_be_widened_by_extra_teams(tw):
