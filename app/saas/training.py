@@ -29,6 +29,21 @@ from .models import (OPEN_SESSION_STATUSES, BrowserSessionToken, Membership, Org
 log = logging.getLogger("didm.training")
 
 
+def personal_training_context(profile, limit: int = 12_000) -> str:
+    """Render text-only Sarvam context while preserving each source's detected type and title."""
+    parts = []
+    if profile and (profile.instructions or "").strip():
+        parts.append("CONTENT TYPE: INSTRUCTIONS\n" + profile.instructions.strip())
+    for source in (profile.sources or []) if profile else []:
+        value = str(source.get("text") or "").strip()
+        if not value:
+            continue
+        kind = str(source.get("kind") or "text").strip().upper()
+        title = str(source.get("title") or "Training material").strip()
+        parts.append(f"SOURCE: {title}\nSOURCE TYPE: {kind}\nCONTENT:\n{value}")
+    return "\n\n---\n\n".join(parts)[:limit]
+
+
 def runtime_identity_variables(schema_names: set[str], user_name: str, agent_name: str) -> dict:
     """Map the signed-in trainee to the identity aliases declared by the Sarvam agent.
 
@@ -275,6 +290,7 @@ class TrainingEngine:
         user_name = (lead_name or "").strip() or (user.name or "").strip() or user.email.split("@", 1)[0]
         org_training = (org.settings or {}).get("training") or {}
         configured_name_variable = str(org_training.get("sarvam_name_variable") or "").strip()
+        configured_context_variable = str(org_training.get("sarvam_context_variable") or "").strip()
         runtime_identity = ({configured_name_variable: user_name} if configured_name_variable
                             else runtime_identity_variables(schema_names, user_name, ent.agent.name))
         if schema_names and (not configured_name_variable or configured_name_variable in schema_names):
@@ -282,14 +298,7 @@ class TrainingEngine:
                 # An explicit scenario/persona value is intentional and wins over the signed-in identity.
                 variables.setdefault(key, value)
         if personal:
-            parts = []
-            if (personal.instructions or "").strip():
-                parts.append("TRAINEE INSTRUCTIONS:\n" + personal.instructions.strip())
-            for source in personal.sources or []:
-                value = str(source.get("text") or "").strip()
-                if value:
-                    parts.append(f"SOURCE: {source.get('title') or 'Training material'}\n{value}")
-            context = "\n\n".join(parts)[:12_000]
+            context = personal_training_context(personal)
             if context:
                 # The provider agent must declare and reference one of these variables. Never send an
                 # undeclared alias: Sarvam rejects the whole outbound request with HTTP 422.
@@ -297,6 +306,11 @@ class TrainingEngine:
                     variables["trainee_training_context"] = context
                 if "user_training_context" in schema_names:
                     variables["user_training_context"] = context
+                if configured_context_variable in schema_names:
+                    variables[configured_context_variable] = context
+                # Owner-configured mapping supports older provider registrations whose local schema is
+                # absent or stale. Add it after schema validation below, just like the name mapping.
+                # This prevents saved text/PDF material from being silently kept local.
         problems = variables_problems(schema, variables, require_all=True)
         if problems:
             raise TrainingError(422, "invalid_variables", "This scenario no longer matches the agent: " + " ".join(problems))
@@ -309,6 +323,11 @@ class TrainingEngine:
             # outbound contract declares `lead_name` at Sarvam, so add it only after local validation.
             variables.update(runtime_identity)
             variables["lead_name"] = user_name
+
+        if personal and configured_context_variable and configured_context_variable not in schema_names:
+            context = personal_training_context(personal)
+            if context:
+                variables[configured_context_variable] = context
 
         if lead_name:
             variables["lead_name"] = lead_name.strip()

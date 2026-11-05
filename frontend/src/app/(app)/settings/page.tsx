@@ -22,6 +22,8 @@ function Settings({ membership }: { membership: Membership }) {
   const [name, setName] = useState('');
   const [sarvamNameVariable, setSarvamNameVariable] = useState('');
   const [originalSarvamNameVariable, setOriginalSarvamNameVariable] = useState('');
+  const [sarvamContextVariable, setSarvamContextVariable] = useState('');
+  const [originalSarvamContextVariable, setOriginalSarvamContextVariable] = useState('');
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -37,6 +39,13 @@ function Settings({ membership }: { membership: Membership }) {
     }).catch(() => undefined);
   }, [orgId]);
 
+  useEffect(() => {
+    api.get<{ name: string }>(`/organizations/${seg(orgId)}/training/sarvam-context-variable`).then((value) => {
+      setSarvamContextVariable(value.name);
+      setOriginalSarvamContextVariable(value.name);
+    }).catch(() => undefined);
+  }, [orgId]);
+
   async function onSave(e: FormEvent) {
     e.preventDefault();
     setFormError(null);
@@ -46,13 +55,20 @@ function Settings({ membership }: { membership: Membership }) {
     if (variable && !/^[a-z_][a-z0-9_]{0,63}$/.test(variable)) {
       return setFormError('Sarvam name variable must use lower-case letters, digits and underscores.');
     }
+    const contextVariable = sarvamContextVariable.trim();
+    if (contextVariable && !/^[a-z_][a-z0-9_]{0,63}$/.test(contextVariable)) {
+      return setFormError('Sarvam context variable must use lower-case letters, digits and underscores.');
+    }
     setBusy(true);
     try {
       const updated = await api.patch<Organization>(`/organizations/${seg(orgId)}`, { name: name.trim() });
       await api.put(`/organizations/${seg(orgId)}/training/sarvam-name-variable`, { name: variable });
+      await api.put(`/organizations/${seg(orgId)}/training/sarvam-context-variable`, { name: contextVariable });
       setData((prev) => ({ ...(prev as OrganizationDetail), ...updated }));
       setSarvamNameVariable(variable);
       setOriginalSarvamNameVariable(variable);
+      setSarvamContextVariable(contextVariable);
+      setOriginalSarvamContextVariable(contextVariable);
       setSaved('Organization settings saved.');
       await refresh();
     } catch (err) {
@@ -97,8 +113,17 @@ function Settings({ membership }: { membership: Membership }) {
               placeholder="lead_name"
               hint="Enter the exact Sarvam agent variable that should receive the signed-in person's display name, for example lead_name, student_name or user_name."
             />
+            <TextField
+              label="Sarvam training context variable"
+              maxLength={64}
+              className="input mono"
+              value={sarvamContextVariable}
+              onChange={(e) => setSarvamContextVariable(e.target.value)}
+              placeholder="trainee_training_context"
+              hint="Enter the exact variable referenced in the Sarvam agent prompt. Personal instructions, text, extracted PDF text and imported transcripts are sent here when each call starts."
+            />
             <div>
-              <Button type="submit" busy={busy} disabled={name.trim() === org.name && sarvamNameVariable.trim() === originalSarvamNameVariable}>
+              <Button type="submit" busy={busy} disabled={name.trim() === org.name && sarvamNameVariable.trim() === originalSarvamNameVariable && sarvamContextVariable.trim() === originalSarvamContextVariable}>
                 Save settings
               </Button>
             </div>
@@ -107,6 +132,7 @@ function Settings({ membership }: { membership: Membership }) {
           <>
             <ReadOnlyField label="Name" value={org.name} />
             <ReadOnlyField label="Sarvam name variable" value={sarvamNameVariable || 'Not configured'} />
+            <ReadOnlyField label="Sarvam training context variable" value={sarvamContextVariable || 'Not configured'} />
           </>
         )}
         <div className="readonly-grid">

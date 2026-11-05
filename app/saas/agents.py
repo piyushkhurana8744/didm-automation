@@ -743,6 +743,38 @@ def build_agents_router() -> APIRouter:
         db.commit()
         return {"name": name}
 
+    @r.get("/training/sarvam-context-variable")
+    def get_sarvam_context_variable(ctx: OrgContext = Depends(org_access("org.view"))):
+        training = (ctx.org.settings or {}).get("training") or {}
+        return {"name": str(training.get("sarvam_context_variable") or "")}
+
+    @r.put("/training/sarvam-context-variable")
+    def set_sarvam_context_variable(body: SarvamNameVariableIn, request: Request,
+                                    ctx: OrgContext = Depends(org_access("org.update")),
+                                    db: Session = Depends(get_db)):
+        """Map personal text/PDF/transcript material to the exact variable used by the hosted agent.
+
+        Provider registrations can predate DIDM's local variable schema.  An explicit organization-owner
+        mapping is therefore allowed even when that local schema is stale; Sarvam remains the authority
+        that validates the variable when a call starts.
+        """
+        name = body.name.strip()
+        if name and not VAR_NAME_RE.fullmatch(name):
+            raise HTTPException(status_code=422, detail="Use lower-case letters, digits and underscores; start with a letter or underscore.")
+        settings = dict(ctx.org.settings or {})
+        training = dict(settings.get("training") or {})
+        if name:
+            training["sarvam_context_variable"] = name
+        else:
+            training.pop("sarvam_context_variable", None)
+        settings["training"] = training
+        ctx.org.settings = settings
+        audit(db, request, "training.sarvam_context_variable_updated", actor=ctx.user,
+              organization_id=ctx.org.id, target_type="organization", target_id=ctx.org.id,
+              details={"name": name or None})
+        db.commit()
+        return {"name": name}
+
     @r.get("/integrations/sarvam/status")
     def sarvam_status(request: Request, ctx: OrgContext = Depends(org_access("agents.manage"))):
         from .sarvam_mcp import connection_status

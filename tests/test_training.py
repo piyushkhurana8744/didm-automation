@@ -169,6 +169,34 @@ def test_org_admin_selects_exact_sarvam_name_variable(tw):
     assert put(a.owner, "Bad Name").status_code == 422
 
 
+def test_org_admin_maps_personal_material_to_exact_sarvam_context_variable(tw):
+    a = tw.a
+    csrf = {"X-CSRF-Token": a.owner.c.cookies.get("didm_csrf")}
+    saved = a.owner.c.put(f"{a.base}/training/sarvam-context-variable",
+                          json={"name": "call_training_material"}, headers=csrf)
+    assert saved.status_code == 200 and saved.json() == {"name": "call_training_material"}
+    assert a.owner.get(f"{a.base}/training/sarvam-context-variable").json() == {
+        "name": "call_training_material"
+    }
+
+    trainee_csrf = {"X-CSRF-Token": a.t1.c.cookies.get("didm_csrf")}
+    added = a.t1.c.post(f"{a.base}/my/agents/{a.agent}/training-profile/text",
+                        json={"title": "Course facts", "text": "The approved fee is 50000."},
+                        headers=trainee_csrf)
+    assert added.status_code == 201, added.text
+
+    response = start(a, a.t1)
+    assert response.status_code == 201, response.text
+    context = tw.eng.sarvam.calls[-1]["variables"]["call_training_material"]
+    assert "SOURCE: Course facts" in context
+    assert "SOURCE TYPE: TEXT" in context
+    assert "The approved fee is 50000." in context
+    assert a.t1.c.put(f"{a.base}/training/sarvam-context-variable",
+                      json={"name": "hacked"}, headers=trainee_csrf).status_code == 403
+    assert a.owner.c.put(f"{a.base}/training/sarvam-context-variable",
+                         json={"name": "Bad Name"}, headers=csrf).status_code == 422
+
+
 def test_new_published_version_does_not_change_existing_session(tw):
     a = tw.a
     sid = start(a, a.t1).json()["id"]
