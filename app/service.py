@@ -134,6 +134,11 @@ class Automation:
             set_flag(session, "stopped", "1")
             for b in session.scalars(select(Batch).where(Batch.active.is_(True))):
                 b.active, b.finished_at, b.note = False, utcnow(), "stopped"
+            # Simulated calls never receive a provider webhook. Close them immediately so switching
+            # from TEST to LIVE mode does not leave the single campaign slot blocked for 30 minutes.
+            for call in session.scalars(select(CallAttempt).where(
+                    CallAttempt.state == "calling", CallAttempt.dry_run.is_(True))):
+                call.state, call.finished_at, call.error = "stopped", utcnow(), "test-mode call stopped"
             session.commit()
             self.alert(session, "info", "Calling stopped by admin.")
         return {"ok": True, "stopped": True}
