@@ -1,13 +1,14 @@
 """Small, durable Excel inbox for the legacy lead dialler."""
 import uuid
-from io import BytesIO
+import csv
+from io import BytesIO, StringIO
 from zipfile import BadZipFile, ZipFile
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from sqlalchemy import delete, select
 
-from .db import ImportedLead, SessionLocal, get_flag, set_flag
+from .db import Batch, CallAttempt, ImportedLead, Setting, SessionLocal, get_flag, utcnow
 from .leads import COL, to_e164
 
 HEADER_ALIASES = {
@@ -31,8 +32,40 @@ def parse_excel(content: bytes, max_rows: int = 5000) -> tuple[list[dict], list[
         raw_rows = _xlsx_rows(content, max_rows + 1)
     except (BadZipFile, KeyError, ET.ParseError, ValueError) as exc:
         raise ValueError("File valid .xlsx workbook nahi hai.") from exc
+    return _validate_rows(raw_rows, max_rows)
+
+
+def parse_upload(content: bytes, filename: str, max_rows: int = 5000):
+    if filename.lower().endswith(".xlsx"):
+        return parse_excel(content, max_rows)
+    if not filename.lower().endswith(".csv"):
+        raise ValueError("Upload an .xlsx or .csv file.")
+    try:
+        text = content.decode("utf-16" if content.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
+        if "\x00" in text:
+            raise ValueError("CSV contains binary data")
+        if text.lower().startswith("sep=") and text[4:5] in (",", ";", "\t"):
+            delimiter, text = text[4], text.split("\n", 1)[1]
+        else:
+            try:
+                delimiter = csv.Sniffer().sniff(next((line for line in text.splitlines() if line.strip()), ""), delimiters=",;\t").delimiter
+            except csv.Error:
+                delimiter = ","
+        rows = []
+        for row in csv.reader(StringIO(text, newline=""), delimiter=delimiter, strict=True):
+            if not any(value.strip() for value in row):
+                continue
+            rows.append(row)
+            if len(rows) > max_rows + 1:
+                raise ValueError(f"Maximum {max_rows} leads allowed per upload.")
+    except (UnicodeError, csv.Error, IndexError) as exc:
+        raise ValueError("CSV could not be read. Export as CSV UTF-8 and try again.") from exc
+    return _validate_rows(rows, max_rows)
+
+
+def _validate_rows(raw_rows, max_rows):
     if not raw_rows:
-        raise ValueError("Excel file khaali hai.")
+        raise ValueError("File khaali hai.")
     header, rows = raw_rows[0], raw_rows[1:]
     mapped = {}
     for i, value in enumerate(header):
@@ -171,13 +204,89 @@ class DatabaseLeadSheet:
         self.fallback.update_row(row, updates)
 
 
-def save_upload(leads: list[dict]) -> str:
+def _flag(session, key, value):
+    row = session.get(Setting, key)
+    if row:
+        row.value = value
+    else:
+        session.add(Setting(key=key, value=value))
+
+
+def queue_details(session, automation=None):
+    from datetime import timedelta
+    from .leads import Lead, blocked_numbers, is_eligible
+
+    upload_id = get_flag(session, "active_excel_upload", "")
+    if not upload_id:
+        return None
+    rows = session.scalars(select(ImportedLead).where(ImportedLead.upload_id == upload_id)
+                           .order_by(ImportedLead.sheet_row)).all()
+    ids = [r.data.get("attempt_id") for r in rows if r.data.get("attempt_id")]
+    calls = {c.attempt_id: c for c in session.scalars(select(CallAttempt).where(
+        CallAttempt.attempt_id.in_(ids)))} if ids else {}
+    leads = [Lead.from_row(r.sheet_row, [r.data.get(k, "") for k in COL]) for r in rows]
+    blocked = blocked_numbers(leads)
+    entries = []
+    counts = {key: 0 for key in ("waiting", "calling", "completed", "failed", "test", "unavailable")}
+    for row, lead in zip(rows, leads):
+        call = calls.get(row.data.get("attempt_id"))
+        eligible = (is_eligible(lead, automation.now_local(), blocked, automation.s.max_attempts,
+                               timedelta(minutes=automation.s.retry_gap_minutes)) if automation else not lead.status)
+        state, label = "unavailable", "Not ready · previous status needs review"
+        if call:
+            if call.dry_run:
+                state, label = "test", "Test only · no real call placed"
+            elif call.state == "calling":
+                state, label = "calling", "Call requested · waiting for provider result"
+            elif call.state == "done":
+                state, label = "completed", {"connected": "Connected · call ended", "no_answer": "No answer", "busy": "Number busy"}.get(call.status, "Call ended · " + (call.status or "unknown result"))
+            elif call.state in ("start_failed", "stuck"):
+                state, label = "failed", "Could not start" if call.state == "start_failed" else "Result not received"
+            else:
+                state, label = "failed", "Stopped"
+        elif not lead.status:
+            state, label = "waiting", "Waiting · not called yet"
+        if eligible:
+            label = "Ready to call" if not call else label + " · retry ready"
+        counts[state] += 1
+        entries.append({"row": row.sheet_row, "name": lead.name, "phone": lead.phone,
+                        "state": state, "status": label, "eligible": bool(eligible),
+                        "detail": (call.error or call.summary or "") if call else "",
+                        "transcript": bool(call and call.raw_result and (call.raw_result.get("transcript") or call.raw_result.get("interaction_transcript")))})
+    ready = [entry for entry in entries if entry["eligible"]]
+    return {"id": upload_id, "filename": get_flag(session, "excel_filename", "Earlier Excel · filename not recorded"),
+            "uploaded_at": get_flag(session, "excel_uploaded_at", ""), "total": len(rows),
+            "waiting": counts["waiting"], "counts": counts, "ready": len(ready),
+            "next": ready[0] if ready else None, "leads": entries, "preview": entries[:10]}
+
+
+def _require_idle(session):
+    if session.scalars(select(Batch).where(Batch.active.is_(True))).first() or session.scalars(
+            select(CallAttempt).where(CallAttempt.state == "calling")).first():
+        raise ValueError("Pehle Stop karein aur current call finish hone dein, phir file replace/remove karein.")
+
+
+def remove_upload():
+    with SessionLocal() as session:
+        _require_idle(session)
+        session.execute(delete(ImportedLead))
+        for key in ("active_excel_upload", "excel_filename", "excel_uploaded_at"):
+            _flag(session, key, "")
+        # Prevent automatic fallback to Google Sheets after removing the Excel queue.
+        _flag(session, "stopped", "1")
+        session.commit()
+
+
+def save_upload(leads: list[dict], filename: str = "Uploaded Excel") -> str:
     upload_id = str(uuid.uuid4())
     with SessionLocal() as session:
+        _require_idle(session)
         # Old imports are operational data, not call history; retain only the current set.
         session.execute(delete(ImportedLead))
         session.add_all([ImportedLead(upload_id=upload_id, sheet_row=i + 2, data=data)
                          for i, data in enumerate(leads)])
+        _flag(session, "active_excel_upload", upload_id)
+        _flag(session, "excel_filename", filename[:120])
+        _flag(session, "excel_uploaded_at", utcnow().isoformat() + "Z")
         session.commit()
-        set_flag(session, "active_excel_upload", upload_id)
     return upload_id

@@ -3,7 +3,34 @@ from zipfile import ZipFile
 
 import pytest
 
-from app.excel_leads import parse_excel, sample_excel
+from app.excel_leads import parse_excel, parse_upload, sample_excel
+
+
+@pytest.mark.parametrize("delimiter,encoding", [(",", "utf-8-sig"), (";", "utf-8"), ("\t", "utf-16")])
+def test_csv_exports_support_common_delimiters_and_encodings(delimiter, encoding):
+    import csv
+    from io import StringIO
+    output = StringIO()
+    writer = csv.writer(output, delimiter=delimiter)
+    writer.writerows([["Name", "Mobile Number", "Notes"],
+                     ["Riya", "+91 98105 12345", "Hello, world\nCall tomorrow"],
+                     ["Duplicate", "9810512345", ""], ["Bad", "123", ""]])
+    leads, rejected = parse_upload(output.getvalue().encode(encoding), "leads.CSV")
+    assert len(leads) == 1
+    assert leads[0]["phone"] == "+919810512345"
+    assert leads[0]["note"] == "Hello, world\nCall tomorrow"
+    assert len(rejected) == 2
+
+
+def test_csv_limits_and_invalid_formats():
+    with pytest.raises(ValueError, match="Maximum"):
+        parse_upload(b"name,phone\nA,9810512345\nB,9876543210", "leads.csv", max_rows=1)
+    with pytest.raises(ValueError, match="lead_name aur phone"):
+        parse_upload(b"person,address\nA,Delhi", "leads.csv")
+    with pytest.raises(ValueError, match="UTF-8"):
+        parse_upload(b"\xffbad", "leads.csv")
+    with pytest.raises(ValueError, match="xlsx or .csv"):
+        parse_upload(b"data", "leads.numbers")
 from app.main import _transcript_text
 
 

@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 
 from .config import Settings, settings as default_settings
 from .db import Alert, Batch, CallAttempt, SessionLocal, WebhookEvent, init_db
-from .excel_leads import DatabaseLeadSheet, parse_excel, sample_excel, save_upload
+from .excel_leads import DatabaseLeadSheet, parse_excel, parse_upload, sample_excel, save_upload
 from .integrations import GoogleSheet, Mailer, Sarvam, Veblika
 from .leads import digits_only, to_e164
 from .security import RateLimiter, client_ip, install_log_redaction
@@ -182,8 +182,8 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
     @app.post("/admin/import-excel", dependencies=[Depends(require_admin)])
     async def import_excel(request: Request, filename: str = Query(default="leads.xlsx")):
         """Import one .xlsx directly as the call queue (no large multipart buffering dependency)."""
-        if not filename.lower().endswith(".xlsx"):
-            raise HTTPException(status_code=400, detail="Sirf .xlsx file upload karein.")
+        if not filename.lower().endswith((".xlsx", ".csv")):
+            raise HTTPException(status_code=400, detail="Upload an .xlsx or .csv file.")
         size = request.headers.get("content-length")
         if size:
             try:
@@ -200,7 +200,7 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
         if active or in_flight:
             raise HTTPException(status_code=409, detail="Current calling batch khatam/stop hone ke baad nayi Excel upload karein.")
         try:
-            leads, rejected = await run_in_threadpool(parse_excel, body)
+            leads, rejected = await run_in_threadpool(parse_upload, body, filename)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         upload_id = await run_in_threadpool(save_upload, leads)
@@ -408,7 +408,7 @@ button{{padding:8px 12px;border-radius:8px;border:1px solid #ccd;background:#fff
 <p><span class="badge">{mode}</span><span class="badge">{state}</span><span class="badge">{e(auto_line)}</span>{batch_line}</p>
 <div class="controls">
 <button onclick="location.href='/admin/sample-leads.xlsx?token='+encodeURIComponent(tok)">Download sample Excel</button>
-<label>Excel <input id="file" type="file" accept=".xlsx"></label>
+<label>Excel <input id="file" type="file" accept=".xlsx,.csv"></label>
 <button onclick="uploadExcel()">Upload queue</button>
 <label>Calls in batch <input id="cnt" type="number" min="1" value="10"></label>
 <button onclick="act('dial',{{count:+document.getElementById('cnt').value}})">Start calling</button>

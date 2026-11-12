@@ -50,6 +50,43 @@ def test_failed_start_becomes_retryable_after_gap(env):
     assert len(sarvam.calls) == 2
 
 
+def test_excel_remove_replace_and_source_history(env):
+    from app.excel_leads import DatabaseLeadSheet, save_upload, remove_upload, queue_details
+    from app.db import get_flag
+
+    _, auto, _, sarvam, *_ = env([], whatsapp_enabled=False)
+    auto.sheet = DatabaseLeadSheet()
+    first = save_upload([{"name": "Old", "phone": "9000000001", "call": "YES"}], "old.xlsx")
+    with SessionLocal() as db:
+        queue = queue_details(db)
+        assert queue["id"] == first and queue["filename"] == "old.xlsx"
+        assert queue["preview"][0]["name"] == "Old"
+    batch = auto.start_batch(1)
+    with SessionLocal() as db:
+        queue = queue_details(db, auto)
+        assert queue["counts"]["calling"] == 1
+        assert queue["ready"] == 0
+        assert "waiting for provider" in queue["leads"][0]["status"]
+    auto.stop()
+    with pytest.raises(ValueError, match="current call"):
+        remove_upload()
+    auto.handle_result(result("att-1", 2))
+    with SessionLocal() as db:
+        queue = queue_details(db, auto)
+        assert queue["counts"]["completed"] == 1
+        assert queue["leads"][0]["status"] == "Connected · call ended"
+    remove_upload()
+    with SessionLocal() as db:
+        assert queue_details(db) is None
+        assert get_flag(db, "stopped") == "1"
+        assert get_flag(db, f"batch_file_{batch['batch_id']}") == "old.xlsx"
+        assert db.scalars(select(CallAttempt)).one().state == "done"
+    save_upload([{"name": "New", "phone": "9000000002", "call": "YES"}], "new.xlsx")
+    auto.resume()
+    auto.start_batch(1)
+    assert sarvam.calls[-1][0] == "+919000000002"
+
+
 def row(name, phone, call="YES", status="", called_at="", outcome="", attempts="", followup="", course="", source=""):
     r = [""] * 22
     r[0], r[1], r[2], r[3], r[5], r[6], r[7], r[9], r[19], r[21] = (

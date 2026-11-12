@@ -1652,3 +1652,30 @@ fieldset.fieldset {
   white-space: pre-line;
   margin-top: 0;
 }
+
+.campaign-ui .button { appearance:none; background:var(--primary); color:#fff; padding:.65rem 1rem; border:1px solid transparent; border-radius:8px; font:inherit; font-weight:600; cursor:pointer; }
+.campaign-ui .button.secondary { background:var(--surface); color:var(--text); border-color:var(--border); }
+.campaign-ui .button:disabled { opacity:.45; cursor:not-allowed; }
+.campaign-ui select,.campaign-ui input[type=file] { background:var(--surface); color:var(--text); border:1px solid var(--border); padding:.6rem; border-radius:8px; font:inherit; max-width:100%; }
+.campaign-ui table { width:100%; border-collapse:collapse; text-align:left; }
+.campaign-ui th,.campaign-ui td { padding:1rem; border-bottom:1px solid var(--border); vertical-align:top; }
+.campaign-ui th { color:var(--text-muted); font-size:.85rem; }
+.campaign-ui .campaign-panel { padding:1.5rem; }
+.campaign-live { border:1px solid var(--border); border-left:4px solid var(--primary); border-radius:12px; padding:1.5rem; background:var(--surface); margin:1rem 0; }
+.campaign-live.is-active { border-left-color:#22c55e; }
+.campaign-live h2 { margin:.7rem 0; }
+.campaign-badge,.campaign-step { color:var(--primary); font-size:.8rem; font-weight:700; letter-spacing:.06em; }
+.campaign-person { font-size:1.4rem; font-weight:600; }
+.campaign-person span { color:var(--text-muted); margin-left:1rem; }
+.campaign-section-title { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:1rem; }
+.campaign-section-title h2 { margin:.5rem 0; overflow-wrap:anywhere; }
+.campaign-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:.75rem; margin:1rem 0; }
+.campaign-stat { background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:10px; padding:1.1rem; text-align:left; cursor:pointer; }
+.campaign-stat.selected { border-color:var(--primary); }
+.campaign-stat strong { display:block; font-size:1.8rem; margin-bottom:.4rem; }
+.campaign-stat span { color:var(--text-muted); }
+.campaign-status { display:inline-block; border-radius:6px; background:var(--surface); border:1px solid var(--border); padding:.35rem .6rem; font-size:.85rem; }
+.status-calling { color:#4ade80; } .status-failed,.status-unavailable { color:#fbbf24; } .status-test { color:var(--text-muted); }
+.campaign-phone { white-space:nowrap; font-variant-numeric:tabular-nums; }
+.campaign-feedback { border:1px solid var(--primary); border-radius:8px; padding:1rem; margin:1rem 0; }
+.campaign-ui details>summary { cursor:pointer; padding:.4rem 0; font-weight:600; }

@@ -103,6 +103,9 @@ class Automation:
             session.add(batch)
             session.commit()
             batch_id = batch.id
+            if getattr(self.sheet, "has_active_import", lambda: False)():
+                set_flag(session, f"batch_file_{batch_id}", get_flag(session, "excel_filename", "Previously uploaded Excel"))
+                set_flag(session, f"batch_upload_{batch_id}", get_flag(session, "active_excel_upload", ""))
         started = self.fill_slots()
         return {"ok": True, "batch_id": batch_id, "dialled_now": started, "dry_run": self.s.dry_run}
 
@@ -326,6 +329,9 @@ class Automation:
             if not claimed:
                 return {"ok": True, "duplicate": True}
             name = call.name
+            upload_id = get_flag(session, f"batch_upload_{call.batch_id}", "")
+            if upload_id and upload_id != get_flag(session, "active_excel_upload", ""):
+                return {"ok": True, "sheet_updated": False, "whatsapp": "skipped: previous Excel file"}
             updates = {
                 "status": f"Done: {status}", "attempt_id": attempt_id or "", "outcome": outcome,
                 "program": fav.get("interested_program", ""), "mode": fav.get("preferred_mode", ""),
