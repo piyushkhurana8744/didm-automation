@@ -13,6 +13,7 @@ from .config import Settings
 from .db import (Alert, Batch, CallAttempt, SessionLocal, WhatsAppClaim, WhatsAppMessage, get_flag, set_flag,
                  utcnow)
 from .leads import BLOCK_OUTCOMES, Lead, digits_only, pick_next, to_e164
+from .integrations import CallTarget
 
 log = logging.getLogger("didm")
 
@@ -64,7 +65,8 @@ class Automation:
         return [Lead.from_row(r, vals) for r, vals in self.sheet.read_rows()]
 
     # ---------- batches ----------
-    def start_batch(self, count: int, min_row: int | None = None, max_row: int | None = None) -> dict:
+    def start_batch(self, count: int, min_row: int | None = None, max_row: int | None = None,
+                    agent: dict | None = None) -> dict:
         with self._lock, SessionLocal() as session:
             if self.is_stopped(session):
                 return {"ok": False, "reason": "Stopped. Send resume first."}
@@ -76,7 +78,13 @@ class Automation:
                     return {"ok": False, "reason": "Missing settings: " + ", ".join(missing)}
             for b in session.scalars(select(Batch).where(Batch.active.is_(True))):
                 b.active, b.finished_at, b.note = False, utcnow(), "replaced by a new batch"
-            batch = Batch(requested=max(1, int(count)), min_row=min_row, max_row=max_row)
+            batch = Batch(requested=max(1, int(count)), min_row=min_row, max_row=max_row,
+                          agent_id=agent.get("id") if agent else None,
+                          agent_name=agent.get("name") if agent else None,
+                          provider_app_id=agent.get("app_id") if agent else None,
+                          provider_app_version=agent.get("app_version") if agent else None,
+                          connection_id=agent.get("connection_id") if agent else None,
+                          agent_phone=agent.get("agent_phone") if agent else None)
             session.add(batch)
             session.commit()
             batch_id = batch.id
@@ -220,7 +228,10 @@ class Automation:
         if self.s.dry_run:
             result = {"ok": True, "status_code": 200, "attempt_id": f"dry-{uuid.uuid4()}", "error": None}
         else:
-            result = self.sarvam.start_call(phone, variables, metadata)
+            target = (CallTarget(batch.provider_app_id, batch.provider_app_version, batch.connection_id,
+                                 batch.agent_phone) if batch.provider_app_id else None)
+            result = (self.sarvam.start_call(phone, variables, metadata, target=target) if target
+                      else self.sarvam.start_call(phone, variables, metadata))
         call.attempt_id = result["attempt_id"]
         if not result["ok"]:
             call.state, call.error, call.finished_at = "start_failed", result["error"], utcnow()

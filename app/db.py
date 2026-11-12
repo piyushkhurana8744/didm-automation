@@ -55,6 +55,12 @@ class Batch(Base):
     created_at = Column(DateTime, default=utcnow)
     finished_at = Column(DateTime, nullable=True)
     note = Column(String(200), nullable=True)
+    agent_id = Column(String(36), nullable=True)
+    agent_name = Column(String(200), nullable=True)
+    provider_app_id = Column(String(200), nullable=True)
+    provider_app_version = Column(Integer, nullable=True)
+    connection_id = Column(String(200), nullable=True)
+    agent_phone = Column(String(30), nullable=True)
 
 
 class ImportedLead(Base):

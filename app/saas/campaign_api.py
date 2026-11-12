@@ -6,19 +6,27 @@ from sqlalchemy import func, select
 from ..db import Batch, CallAttempt, SessionLocal
 from ..excel_leads import parse_excel, sample_excel, save_upload
 from ..main import _transcript_text
-from .auth import OrgContext, org_access
+from .auth import OrgContext, get_db, org_access
+from .models import Agent, AgentVersion
+from sqlalchemy.orm import Session
 
 
 def build_campaign_router(automation) -> APIRouter:
     r = APIRouter(prefix="/api/v1/organizations/{org_id}/calling-campaign")
 
     @r.get("")
-    def status(ctx: OrgContext = Depends(org_access("training.view"))):
+    def status(ctx: OrgContext = Depends(org_access("training.view")), db: Session = Depends(get_db)):
+        agents = db.execute(select(Agent, AgentVersion).join(AgentVersion, Agent.published_version_id == AgentVersion.id)
+                            .where(Agent.organization_id == ctx.org.id, Agent.status == "active",
+                                   AgentVersion.status == "published")).all()
         with SessionLocal() as db:
             calls = db.scalars(select(CallAttempt).order_by(CallAttempt.id.desc()).limit(100)).all()
             batch = db.scalars(select(Batch).order_by(Batch.id.desc())).first()
-        return {"batch": None if not batch else {"id": batch.id, "requested": batch.requested,
-                "dialled": batch.dialled, "active": batch.active, "note": batch.note},
+        return {"agents": [{"id": a.id, "name": a.name, "app_id": a.provider_app_id,
+                 "app_version": v.provider_app_version} for a, v in agents if "phone" in (a.channels or [])],
+                "batch": None if not batch else {"id": batch.id, "requested": batch.requested,
+                "dialled": batch.dialled, "active": batch.active, "note": batch.note,
+                "agent_id": batch.agent_id, "agent_name": batch.agent_name},
                 "calls": [{"id": c.id, "name": c.name, "phone": c.phone, "state": c.state,
                 "status": c.status, "outcome": c.outcome, "duration": c.duration,
                 "summary": c.summary or c.error, "transcript": _transcript_text(c.raw_result)} for c in calls]}
@@ -47,9 +55,23 @@ def build_campaign_router(automation) -> APIRouter:
                 "rejected_rows": rejected[:100]}
 
     @r.post("/start")
-    def start(body: dict, ctx: OrgContext = Depends(org_access("training.manage"))):
+    def start(body: dict, ctx: OrgContext = Depends(org_access("training.manage")), db: Session = Depends(get_db)):
         count = min(max(int(body.get("count", 1)), 1), 5000)
-        result = automation.start_batch(count)
+        agent_id = str(body.get("agent_id") or "")
+        row = db.execute(select(Agent, AgentVersion).join(AgentVersion, Agent.published_version_id == AgentVersion.id)
+                         .where(Agent.id == agent_id, Agent.organization_id == ctx.org.id,
+                                Agent.status == "active", AgentVersion.status == "published")).first()
+        if not row or "phone" not in (row[0].channels or []):
+            raise HTTPException(422, "Select an active published phone agent.")
+        a, v = row
+        config = v.configuration_snapshot or {}
+        agent = {"id": a.id, "name": a.name, "app_id": a.provider_app_id,
+                 "app_version": v.provider_app_version,
+                 "connection_id": config.get("connection_id") or automation.s.sarvam_connection_id,
+                 "agent_phone": config.get("agent_phone_number") or automation.s.sarvam_agent_phone}
+        if not agent["connection_id"] or not agent["agent_phone"]:
+            raise HTTPException(409, "Selected agent has no phone connection configuration.")
+        result = automation.start_batch(count, agent=agent)
         if not result.get("ok"):
             raise HTTPException(409, result.get("reason", "Calling could not start."))
         return result
