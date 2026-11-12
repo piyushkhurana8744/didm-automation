@@ -12,13 +12,13 @@ branch_labels = None
 depends_on = None
 
 def upgrade():
+    existing = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("batches")}
     with op.batch_alter_table("batches") as batch:
-        batch.add_column(sa.Column("agent_id", sa.String(36)))
-        batch.add_column(sa.Column("agent_name", sa.String(200)))
-        batch.add_column(sa.Column("provider_app_id", sa.String(200)))
-        batch.add_column(sa.Column("provider_app_version", sa.Integer()))
-        batch.add_column(sa.Column("connection_id", sa.String(200)))
-        batch.add_column(sa.Column("agent_phone", sa.String(30)))
+        for name, kind in (("agent_id", sa.String(36)), ("agent_name", sa.String(200)),
+                           ("provider_app_id", sa.String(200)), ("provider_app_version", sa.Integer()),
+                           ("connection_id", sa.String(200)), ("agent_phone", sa.String(30))):
+            if name not in existing:
+                batch.add_column(sa.Column(name, kind))
 
 def downgrade():
     with op.batch_alter_table("batches") as batch:

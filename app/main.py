@@ -95,6 +95,10 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
             from apscheduler.schedulers.background import BackgroundScheduler
             scheduler = BackgroundScheduler(timezone=s.timezone)
             scheduler.add_job(auto.check_stuck_calls, "interval", minutes=5, id="stuck")
+            # Recover an existing batch after restart or a failed webhook follow-up,
+            # even when automatic creation of new batches is disabled.
+            scheduler.add_job(auto.fill_slots, "interval", seconds=30, id="campaign_queue",
+                              max_instances=1, coalesce=True)
             scheduler.add_job(auto.send_daily_report, "cron", hour=s.daily_report_hour,
                               minute=s.daily_report_minute, id="report")
             scheduler.add_job(training.sweep, "interval", minutes=1, id="training_sweep")

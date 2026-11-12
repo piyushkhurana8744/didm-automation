@@ -32,7 +32,7 @@ export default function CallingCampaignPage() {
       <div className="campaign-actions">
         <button className="button secondary" onClick={()=>act(()=>api.download(`${base}/sample.xlsx`,'didm-leads-sample.xlsx'),'Sample downloaded.')}>Download sample Excel</button>
         <label className="file-control">Lead Excel (.xlsx)<input type="file" accept=".xlsx" onChange={e=>setFile(e.target.files?.[0] ?? null)} /></label>
-        <button className="button" disabled={!file||busy} onClick={()=>act(()=>api.upload(`${base}/upload`,file!), 'Excel uploaded. Queue is ready.')}>Upload queue</button>
+        <button className="button" disabled={!file||busy} onClick={()=>act(async()=>{ const result=await api.upload<{accepted:number;rejected:number}>(`${base}/upload`,file!); setCount(result.accepted); return result; }, 'Excel uploaded. Batch count set to all valid leads. Select your agent and start calling.')}>Upload queue</button>
       </div>
       <div className="campaign-actions">
         <label className="file-control">Calling agent<select value={agentId} onChange={e=>setAgentId(e.target.value)}><option value="">Select agent</option>{(data?.agents??[]).map(a=><option key={a.id} value={a.id}>{a.name} · Sarvam v{a.app_version}</option>)}</select></label>

@@ -17,6 +17,39 @@ from tests.conftest import fresh_db_url
 NOW = datetime(2026, 10, 16, 11, 0)
 
 
+def test_excel_campaign_is_sequential_and_keeps_late_transcript(env):
+    from app.excel_leads import DatabaseLeadSheet, save_upload
+    from app.main import _transcript_text
+
+    client, auto, _, sarvam, veb, _ = env([], max_parallel_calls=5, whatsapp_enabled=False)
+    save_upload([{"name": name, "phone": phone, "call": "YES"}
+                 for name, phone in [("A", "9000000001"), ("B", "9000000002")]])
+    auto.sheet = DatabaseLeadSheet()
+    assert auto.start_batch(2)["dialled_now"] == 1
+    assert not auto.start_batch(2)["ok"]
+    auto.handle_result(result("att-1", 2))
+    assert len(sarvam.calls) == 2
+    late = result("att-1", 2)
+    late["interaction_transcript"] = [{"role": "agent", "text": "Hello A"}]
+    assert auto.handle_result(late)["duplicate"]
+    assert len(sarvam.calls) == 2
+    with SessionLocal() as db:
+        call = db.scalars(select(CallAttempt).where(CallAttempt.attempt_id == "att-1")).one()
+        assert _transcript_text(call.raw_result) == "agent: Hello A"
+    auto.handle_result(result("att-2", 3))
+    with SessionLocal() as db:
+        assert not db.scalars(select(Batch)).one().active
+
+
+def test_failed_start_becomes_retryable_after_gap(env):
+    client, auto, sheet, sarvam, *_ = env([row("A", "9000000001")], sarvam_ok=False)
+    auto.start_batch(1)
+    assert sheet.rows[2][6] == "Done: start_failed"
+    auto._clock = lambda: NOW + timedelta(minutes=auto.s.retry_gap_minutes + 1)
+    auto.start_batch(1)
+    assert len(sarvam.calls) == 2
+
+
 def row(name, phone, call="YES", status="", called_at="", outcome="", attempts="", followup="", course="", source=""):
     r = [""] * 22
     r[0], r[1], r[2], r[3], r[5], r[6], r[7], r[9], r[19], r[21] = (
@@ -222,7 +255,7 @@ def test_start_failures_alert_and_stop_after_three(env):
     client.post("/admin/dial", json={"count": 5}, headers=H)
     assert len(sarvam.calls) == 3
     assert any("3 calls in a row" in subj for subj, _ in mail.sent)
-    assert sheet.rows[2][6] == "HTTP 400" and sheet.rows[2][15] == "bad request"
+    assert sheet.rows[2][6] == "Done: start_failed" and sheet.rows[2][15] == "bad request"
 
 
 def test_sheet_down_no_call_placed(env):

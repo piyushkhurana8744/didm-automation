@@ -67,6 +67,8 @@ def _xlsx_rows(content: bytes, limit: int) -> list[list[str]]:
     """Read the first XLSX worksheet with the standard library (values only)."""
     ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
     with ZipFile(BytesIO(content)) as archive:
+        if sum(item.file_size for item in archive.infolist()) > 32 * 1024 * 1024:
+            raise ValueError("Workbook expands beyond the processing limit")
         shared = []
         if "xl/sharedStrings.xml" in archive.namelist():
             root = ET.fromstring(archive.read("xl/sharedStrings.xml"))

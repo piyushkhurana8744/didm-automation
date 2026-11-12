@@ -89,8 +89,10 @@ class Automation:
                     missing = self.s.missing_for_live()
                 if missing:
                     return {"ok": False, "reason": "Missing settings: " + ", ".join(missing)}
-            for b in session.scalars(select(Batch).where(Batch.active.is_(True))):
-                b.active, b.finished_at, b.note = False, utcnow(), "replaced by a new batch"
+            if session.scalars(select(Batch).where(Batch.active.is_(True))).first():
+                return {"ok": False, "reason": "A batch is already running. Stop it before starting another."}
+            if self._in_flight(session):
+                return {"ok": False, "reason": "Wait for the current call result before starting another batch."}
             batch = Batch(requested=max(1, int(count)), min_row=min_row, max_row=max_row,
                           agent_id=agent.get("id") if agent else None,
                           agent_name=agent.get("name") if agent else None,
@@ -257,7 +259,7 @@ class Automation:
         self._safe_sheet(session, lead.row, {
             "status": f"HTTP {result['status_code']}" if result["status_code"] else "HTTP error",
             "attempt_id": result["attempt_id"] or "",
-            **({"summary": result["error"] or ""} if not result["ok"] else {}),
+            **({"status": "Done: start_failed", "summary": result["error"] or ""} if not result["ok"] else {}),
         })
         if not result["ok"]:
             self.alert(session, "error", f"Row {lead.row} ({lead.name}): Sarvam did not start the call. {result['error']}")
@@ -296,6 +298,11 @@ class Automation:
             if call is None and meta.get("call_id"):
                 call = session.get(CallAttempt, int(meta["call_id"]))
             if call and call.state == "done":
+                # Providers may deliver the transcript after the initial completion event.
+                # Enrich history without repeating follow-ups or advancing the queue twice.
+                if payload.get("interaction_transcript") or payload.get("transcript"):
+                    call.raw_result = {**(call.raw_result or {}), **payload}
+                    session.commit()
                 return {"ok": True, "duplicate": True}
             if row is None:
                 row = call.sheet_row if call else None

@@ -71,7 +71,7 @@ class ImportedLead(Base):
     upload_id = Column(String(36), index=True, nullable=False)
     sheet_row = Column(Integer, nullable=False)
     data = Column(JSON, nullable=False)
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
 
 
 class Alert(Base):
