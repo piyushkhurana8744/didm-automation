@@ -150,6 +150,21 @@ export const api = {
   patch: <T>(path: string, body?: unknown, opts?: RequestOptions) => request<T>('PATCH', path, body ?? {}, opts),
   put: <T>(path: string, body?: unknown, opts?: RequestOptions) => request<T>('PUT', path, body ?? {}, opts),
   delete: <T>(path: string, opts?: RequestOptions) => request<T>('DELETE', path, undefined, opts),
+  upload: async <T>(path: string, file: File): Promise<T> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+    const csrf = readCookie(CSRF_COOKIE);
+    if (csrf) headers['X-CSRF-Token'] = csrf;
+    const res = await fetch(`${API_PREFIX}${path}`, { method: 'POST', headers, credentials: 'same-origin', body: file });
+    const payload = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError(res.status, detailFrom(payload, res.status), res.headers.get('X-Error-Code'));
+    return payload as T;
+  },
+  download: async (path: string, filename: string): Promise<void> => {
+    const res = await fetch(`${API_PREFIX}${path}`, { credentials: 'same-origin' });
+    if (!res.ok) throw new ApiError(res.status, fallbackMessage(res.status));
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+  },
 };
 
 /** Encodes one path segment (ids come from the API, but never trust them into a URL raw). */

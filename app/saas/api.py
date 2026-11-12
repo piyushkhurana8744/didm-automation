@@ -627,6 +627,8 @@ def mount_saas(app: FastAPI, s, mailer, limiter):
     app.include_router(build_training_router(app.state.training))
     from .intelligence_api import build_intelligence_router
     app.include_router(build_intelligence_router(app.state.training, app.state.intelligence, app.state.recordings))
+    from .campaign_api import build_campaign_router
+    app.include_router(build_campaign_router(app.state.automation))
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

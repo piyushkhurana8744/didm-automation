@@ -57,6 +57,17 @@ class Batch(Base):
     note = Column(String(200), nullable=True)
 
 
+class ImportedLead(Base):
+    """A validated Excel row.  ``data`` uses the same column keys as leads.COL."""
+    __tablename__ = "imported_leads"
+    __table_args__ = (UniqueConstraint("upload_id", "sheet_row", name="uq_imported_leads_upload_row"),)
+    id = Column(Integer, primary_key=True)
+    upload_id = Column(String(36), index=True, nullable=False)
+    sheet_row = Column(Integer, nullable=False)
+    data = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+
+
 class Alert(Base):
     __tablename__ = "alerts"
     id = Column(Integer, primary_key=True)

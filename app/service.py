@@ -152,7 +152,11 @@ class Automation:
                     close("daily cap reached")
                     self.alert(session, "warn", f"Daily call cap of {self.s.daily_call_cap} reached.")
                     return started
-                if self._in_flight(session) >= self.s.max_parallel_calls:
+                # User-uploaded Excel campaigns are deliberately sequential. This protects the
+                # provider quota and the app even if MAX_PARALLEL_CALLS was raised for another flow.
+                excel_queue = getattr(self.sheet, "has_active_import", lambda: False)()
+                slot_limit = 1 if excel_queue else self.s.max_parallel_calls
+                if self._in_flight(session) >= slot_limit:
                     return started
                 if leads is None:
                     try:

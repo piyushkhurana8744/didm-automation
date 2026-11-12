@@ -7,12 +7,13 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .config import Settings, settings as default_settings
 from .db import Alert, Batch, CallAttempt, SessionLocal, WebhookEvent, init_db
+from .excel_leads import DatabaseLeadSheet, parse_excel, sample_excel, save_upload
 from .integrations import GoogleSheet, Mailer, Sarvam, Veblika
 from .leads import digits_only, to_e164
 from .security import RateLimiter, client_ip, install_log_redaction
@@ -41,7 +42,9 @@ class DryRunSheet:
 def build_automation(s: Settings, sheet=None, sarvam=None, veblika=None, mailer=None, clock=None) -> Automation:
     if sheet is None:
         real = GoogleSheet(s) if s.spreadsheet_id and s.google_service_account_json else None
-        sheet = DryRunSheet(real) if s.dry_run else real
+        # Excel imports live in the database and survive restarts. Google Sheets remains the fallback
+        # until an Excel file is uploaded.
+        sheet = DatabaseLeadSheet(DryRunSheet(real) if s.dry_run else real)
     return Automation(s, sheet, sarvam or Sarvam(s), veblika or Veblika(s), mailer or Mailer(s), clock=clock)
 
 
@@ -171,6 +174,49 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
     @app.post("/admin/dial", dependencies=[Depends(require_admin)])
     def dial(req: DialRequest):
         return auto.start_batch(req.count, req.min_row, req.max_row)
+
+    @app.post("/admin/import-excel", dependencies=[Depends(require_admin)])
+    async def import_excel(request: Request, filename: str = Query(default="leads.xlsx")):
+        """Import one .xlsx directly as the call queue (no large multipart buffering dependency)."""
+        if not filename.lower().endswith(".xlsx"):
+            raise HTTPException(status_code=400, detail="Sirf .xlsx file upload karein.")
+        size = request.headers.get("content-length")
+        if size:
+            try:
+                if int(size) > 5 * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="Excel file maximum 5 MB ho sakti hai.")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid Content-Length header.")
+        body = await request.body()
+        if not body or len(body) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=413 if body else 400, detail="Excel file missing ya 5 MB se badi hai.")
+        with SessionLocal() as session:
+            active = session.scalars(select(Batch).where(Batch.active.is_(True))).first()
+            in_flight = session.scalar(select(func.count(CallAttempt.id)).where(CallAttempt.state == "calling")) or 0
+        if active or in_flight:
+            raise HTTPException(status_code=409, detail="Current calling batch khatam/stop hone ke baad nayi Excel upload karein.")
+        try:
+            leads, rejected = await run_in_threadpool(parse_excel, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        upload_id = await run_in_threadpool(save_upload, leads)
+        return {"ok": True, "upload_id": upload_id, "accepted": len(leads),
+                "rejected": len(rejected), "rejected_rows": rejected[:100]}
+
+    @app.get("/admin/sample-leads.xlsx", dependencies=[Depends(require_admin)])
+    def sample_leads_excel():
+        return Response(sample_excel(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": 'attachment; filename="didm-leads-sample.xlsx"'})
+
+    @app.get("/admin/calls", dependencies=[Depends(require_admin)])
+    def calls(limit: int = 100):
+        with SessionLocal() as session:
+            rows = session.scalars(select(CallAttempt).order_by(CallAttempt.id.desc())
+                                   .limit(min(max(limit, 1), 500))).all()
+        return [{"id": c.id, "name": c.name, "phone": c.phone, "state": c.state,
+                 "status": c.status, "outcome": c.outcome, "duration": c.duration,
+                 "summary": c.summary, "transcript": _transcript_text(c.raw_result),
+                 "started_at": c.started_at.isoformat() if c.started_at else None} for c in rows]
 
     @app.post("/admin/stop", dependencies=[Depends(require_admin)])
     def stop():
@@ -333,7 +379,8 @@ def _render_dashboard(r, calls, alerts, batch) -> str:
     outcome_html = "".join(f"<li>{e(str(k))}: {v}</li>" for k, v in r["by_outcome"].items()) or "<li>None yet</li>"
     rows = "".join(
         f"<tr><td>{c.sheet_row}</td><td>{e(c.name or '')}</td><td>{e(c.state)}</td><td>{e(c.status or '')}</td>"
-        f"<td>{e(c.outcome or '')}</td><td>{c.duration or ''}</td><td>{e((c.summary or c.error or '')[:140])}</td></tr>"
+        f"<td>{e(c.outcome or '')}</td><td>{c.duration or ''}</td><td>{e((c.summary or c.error or '')[:140])}</td>"
+        f"<td><details><summary>View</summary><pre>{e(_transcript_text(c.raw_result) or 'Transcript not received yet')}</pre></details></td></tr>"
         for c in calls)
     alert_rows = "".join(f"<li class='{e(a.level)}'>{a.created_at:%d %b %H:%M} UTC: {e(a.message)}</li>" for a in alerts) or "<li>No alerts</li>"
     batch_line = (f"Batch {batch.id}: {batch.dialled} of {batch.requested} dialled, "
@@ -349,13 +396,16 @@ body{{font-family:system-ui,sans-serif;margin:16px;background:#f7f7f8;color:#1a1
 .tile{{background:#fff;border-radius:10px;padding:12px;box-shadow:0 1px 2px #0001}}
 .n{{font-size:26px;font-weight:600}}.l{{color:#666;font-size:13px}}
 .badge{{display:inline-block;padding:3px 8px;border-radius:6px;background:#eef;margin-right:6px}}
-table{{width:100%;border-collapse:collapse;background:#fff;font-size:13px}}td,th{{border-bottom:1px solid #eee;padding:6px;text-align:left}}
+table{{width:100%;border-collapse:collapse;background:#fff;font-size:13px}}td,th{{border-bottom:1px solid #eee;padding:6px;text-align:left;vertical-align:top}}pre{{white-space:pre-wrap;max-width:520px}}
 .wrap{{overflow-x:auto}}.controls{{margin:12px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}}
 button{{padding:8px 12px;border-radius:8px;border:1px solid #ccd;background:#fff;cursor:pointer}}input{{width:70px;padding:6px}}li.error{{color:#b00020}}li.warn{{color:#a05a00}}
 </style></head><body>
 <h2>DIDM calling dashboard, {e(r['date'])}</h2>
 <p><span class="badge">{mode}</span><span class="badge">{state}</span><span class="badge">{e(auto_line)}</span>{batch_line}</p>
 <div class="controls">
+<button onclick="location.href='/admin/sample-leads.xlsx?token='+encodeURIComponent(tok)">Download sample Excel</button>
+<label>Excel <input id="file" type="file" accept=".xlsx"></label>
+<button onclick="uploadExcel()">Upload queue</button>
 <label>Calls in batch <input id="cnt" type="number" min="1" value="10"></label>
 <button onclick="act('dial',{{count:+document.getElementById('cnt').value}})">Start calling</button>
 <button onclick="act('stop')">Stop all calling</button>
@@ -364,7 +414,7 @@ button{{padding:8px 12px;border-radius:8px;border:1px solid #ccd;background:#fff
 <span id="msg"></span></div>
 <div class="tiles">{tile_html}</div>
 <h3>Outcomes today</h3><ul>{outcome_html}</ul>
-<h3>Latest calls</h3><div class="wrap"><table><tr><th>Row</th><th>Name</th><th>State</th><th>Status</th><th>Outcome</th><th>Secs</th><th>Summary</th></tr>{rows}</table></div>
+<h3>Latest calls</h3><div class="wrap"><table><tr><th>Row</th><th>Name</th><th>State</th><th>Status</th><th>Outcome</th><th>Secs</th><th>Summary</th><th>Transcript</th></tr>{rows}</table></div>
 <h3>Alerts</h3><ul>{alert_rows}</ul>
 <script>
 const tok=(new URLSearchParams(location.search).get('token')||'').replace(/ /g,'+');
@@ -376,4 +426,32 @@ async function act(path,body){{
   const j=await r.json();document.getElementById('msg').textContent=j.reason||(j.ok===false?'Failed':'Done');
   setTimeout(()=>location.reload(),1500);
 }}
+async function uploadExcel(){{
+  const f=document.getElementById('file').files[0];if(!f){{document.getElementById('msg').textContent='Choose an .xlsx file';return;}}
+  const r=await fetch('/admin/import-excel?filename='+encodeURIComponent(f.name),{{method:'POST',headers:{{'Authorization':'Bearer '+tok,'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}},body:f}});
+  const j=await r.json();document.getElementById('msg').textContent=r.ok?`${{j.accepted}} leads ready (${{j.rejected}} rejected)`:j.detail;
+}}
+setTimeout(()=>location.reload(),10000);
 </script></body></html>"""
+
+
+def _transcript_text(payload) -> str:
+    """Normalize the transcript variants Sarvam has used without inventing text."""
+    if not isinstance(payload, dict):
+        return ""
+    transcript = payload.get("interaction_transcript") or payload.get("transcript") or []
+    if isinstance(transcript, str):
+        return transcript.strip()
+    if isinstance(transcript, dict):
+        transcript = transcript.get("turns") or transcript.get("messages") or []
+    lines = []
+    if isinstance(transcript, list):
+        for turn in transcript:
+            if isinstance(turn, str):
+                lines.append(turn)
+            elif isinstance(turn, dict):
+                speaker = turn.get("role") or turn.get("speaker") or "speaker"
+                text = turn.get("text") or turn.get("en_text") or turn.get("content") or ""
+                if text:
+                    lines.append(f"{speaker}: {text}")
+    return "\n".join(lines).strip()

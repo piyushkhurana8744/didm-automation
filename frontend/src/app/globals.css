@@ -102,6 +102,13 @@ a:hover {
   color: var(--primary-hover);
 }
 
+.campaign-panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:1rem; margin:1rem 0 1.5rem; }
+.campaign-actions { display:flex; flex-wrap:wrap; align-items:end; gap:.75rem; margin-bottom:.75rem; }
+.file-control { display:grid; gap:.25rem; color:var(--text-muted); }
+.small-input { width:90px; padding:.55rem; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); color:var(--text); }
+.campaign-message { color:var(--primary); }
+.transcript { white-space:pre-wrap; min-width:280px; max-width:520px; }
+
 :focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
