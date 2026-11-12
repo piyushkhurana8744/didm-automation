@@ -7,7 +7,7 @@ import { useSession } from '@/lib/session';
 import { PageHeader } from '@/components/PageHeader';
 
 type Call = { id:number; name:string; phone:string; state:string; status?:string; outcome?:string; duration?:number; summary?:string; transcript?:string };
-type Campaign = { agents:{id:string;name:string;app_id:string;app_version:number}[]; batch: null | { id:number; requested:number; dialled:number; active:boolean; note?:string;agent_name?:string }; calls: Call[] };
+type Campaign = { mode:'test'|'live'; agents:{id:string;name:string;app_id:string;app_version:number}[]; batch: null | { id:number; requested:number;dialled:number;active:boolean;note?:string;agent_name?:string }; calls: Call[] };
 
 export default function CallingCampaignPage() {
   const { activeMembership } = useSession();
@@ -27,6 +27,7 @@ export default function CallingCampaignPage() {
   if (!orgId) return null;
   return <>
     <PageHeader title="Calling campaigns" description="Upload an Excel lead list. Calls run one-by-one and transcripts appear here automatically." />
+    {data?.mode==='test'&&<div className="campaign-warning" role="alert"><strong>TEST MODE:</strong> Queue aur results simulate honge; real phone calls nahi jayengi. Server par DRY_RUN=false configure karein.</div>}
     <section className="campaign-panel">
       <div className="campaign-actions">
         <button className="button secondary" onClick={()=>act(()=>api.download(`${base}/sample.xlsx`,'didm-leads-sample.xlsx'),'Sample downloaded.')}>Download sample Excel</button>

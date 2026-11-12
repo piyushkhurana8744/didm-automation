@@ -73,7 +73,20 @@ class Automation:
             if not self.within_calling_hours():
                 return {"ok": False, "reason": f"Outside calling hours ({self.s.calling_start_hour}:00 to {self.s.calling_end_hour}:00)."}
             if not self.s.dry_run:
-                missing = self.s.missing_for_live()
+                excel_queue = getattr(self.sheet, "has_active_import", lambda: False)()
+                # Database-backed Excel campaigns do not need Google Sheets or WhatsApp. They only
+                # need the Sarvam outbound + result-webhook configuration.
+                if excel_queue:
+                    required = {
+                        "SARVAM_API_KEY": self.s.sarvam_api_key,
+                        "SARVAM_ORG_ID": self.s.sarvam_org_id,
+                        "SARVAM_WORKSPACE_ID": self.s.sarvam_workspace_id,
+                        "PUBLIC_BASE_URL": self.s.public_base_url,
+                        "WEBHOOK_SECRET": self.s.webhook_secret,
+                    }
+                    missing = [name for name, value in required.items() if not value]
+                else:
+                    missing = self.s.missing_for_live()
                 if missing:
                     return {"ok": False, "reason": "Missing settings: " + ", ".join(missing)}
             for b in session.scalars(select(Batch).where(Batch.active.is_(True))):

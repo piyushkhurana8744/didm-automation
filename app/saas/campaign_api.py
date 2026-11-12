@@ -22,7 +22,8 @@ def build_campaign_router(automation) -> APIRouter:
         with SessionLocal() as db:
             calls = db.scalars(select(CallAttempt).order_by(CallAttempt.id.desc()).limit(100)).all()
             batch = db.scalars(select(Batch).order_by(Batch.id.desc())).first()
-        return {"agents": [{"id": a.id, "name": a.name, "app_id": a.provider_app_id,
+        return {"mode": "test" if automation.s.dry_run else "live",
+                "agents": [{"id": a.id, "name": a.name, "app_id": a.provider_app_id,
                  "app_version": v.provider_app_version} for a, v in agents if "phone" in (a.channels or [])],
                 "batch": None if not batch else {"id": batch.id, "requested": batch.requested,
                 "dialled": batch.dialled, "active": batch.active, "note": batch.note,
