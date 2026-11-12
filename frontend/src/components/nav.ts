@@ -24,7 +24,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/knowledge/', label: 'Knowledge library', permission: 'knowledge.view', group: 'AI Training', blurb: 'Approved facts, FAQs and document revisions for AI agents.' },
   { href: '/assignments/', label: 'Assignments', permission: 'assignments.manage', group: 'AI Training', blurb: 'Give people and teams access to agents.' },
   { href: '/training/', label: 'Sessions & evaluations', permission: 'training.view', group: 'AI Training', blurb: 'Practice sessions, usage and limits for the organization.' },
-  { href: '/calling-campaign/', label: 'Calling campaigns', permission: 'training.view', group: 'AI Training', blurb: 'Upload leads and run sequential outbound calls.' },
+  { href: '/calling-campaign/', label: 'Calling campaigns', permission: 'campaigns.use', group: 'AI Training', blurb: 'Upload leads and run sequential outbound calls.' },
   { href: '/rubrics/', label: 'Evaluation rubrics', permission: 'training.view', group: 'AI Training', blurb: 'How practice sessions are scored.' },
   { href: '/training/phones/', label: 'Verified phones', permission: 'training.manage', group: 'AI Training', blurb: 'Verify the numbers trainees practise on.' },
   { href: '/settings/', label: 'Organization settings', permission: 'org.update', group: 'Settings', blurb: 'Organization name and details.' },

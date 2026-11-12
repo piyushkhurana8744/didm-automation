@@ -7,6 +7,7 @@ export type Permission =
   | 'invitations.manage'
   | 'org.update'
   | 'audit.view'
+  | 'campaigns.use'
   | 'training.self'
   | 'agents.view'
   | 'agents.manage'

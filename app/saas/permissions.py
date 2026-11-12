@@ -21,6 +21,7 @@ PERMISSIONS = {
     "org.update": ADMIN,
     "audit.view": ADMIN,
     # voice agents (phase 2)
+    "campaigns.use": TRAINEE,    # campaign API also requires an active phone assignment
     "training.self": TRAINEE,      # see agents assigned to me
     "agents.view": TRAINER,        # see the whole agent registry, versions and scenarios
     "agents.manage": ADMIN,        # register, configure, publish and archive agents

@@ -9,17 +9,32 @@ from urllib.parse import unquote
 from ..main import _transcript_text
 from .auth import OrgContext, get_db, org_access
 from .models import Agent, AgentVersion
+from .agents import entitlements
+from .permissions import has_permission
 from sqlalchemy.orm import Session
 
 
 def build_campaign_router(automation) -> APIRouter:
     r = APIRouter(prefix="/api/v1/organizations/{org_id}/calling-campaign")
 
+    def campaign_access(ctx: OrgContext = Depends(org_access("campaigns.use")),
+                        db: Session = Depends(get_db)):
+        if not has_permission(ctx.role, "training.manage") and not any(
+                "phone" in (e.agent.channels or []) for e in entitlements(db, ctx.org.id, ctx.user.id)):
+            raise HTTPException(403, "An active phone agent assignment is required for Excel calling.")
+        return ctx
+
+    def available_agents(ctx, db):
+        if has_permission(ctx.role, "training.manage"):
+            return db.execute(select(Agent, AgentVersion).join(
+                AgentVersion, Agent.published_version_id == AgentVersion.id).where(
+                Agent.organization_id == ctx.org.id, Agent.status == "active",
+                AgentVersion.status == "published")).all()
+        return [(e.agent, e.version) for e in entitlements(db, ctx.org.id, ctx.user.id)]
+
     @r.get("")
-    def status(ctx: OrgContext = Depends(org_access("training.view")), db: Session = Depends(get_db)):
-        agents = db.execute(select(Agent, AgentVersion).join(AgentVersion, Agent.published_version_id == AgentVersion.id)
-                            .where(Agent.organization_id == ctx.org.id, Agent.status == "active",
-                                   AgentVersion.status == "published")).all()
+    def status(ctx: OrgContext = Depends(campaign_access), db: Session = Depends(get_db)):
+        agents = available_agents(ctx, db)
         with SessionLocal() as db:
             queue = queue_details(db, automation)
             stopped = automation.is_stopped(db)
@@ -40,12 +55,12 @@ def build_campaign_router(automation) -> APIRouter:
                 "summary": c.summary or c.error, "transcript": _transcript_text(c.raw_result)} for c in calls]}
 
     @r.get("/sample.xlsx")
-    def sample(ctx: OrgContext = Depends(org_access("training.manage"))):
+    def sample(ctx: OrgContext = Depends(campaign_access)):
         return Response(sample_excel(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": 'attachment; filename="didm-leads-sample.xlsx"'})
 
     @r.post("/upload")
-    async def upload(request: Request, ctx: OrgContext = Depends(org_access("training.manage"))):
+    async def upload(request: Request, ctx: OrgContext = Depends(campaign_access)):
         body = await request.body()
         if not body or len(body) > 5 * 1024 * 1024:
             raise HTTPException(413 if body else 400, "Excel/CSV file missing ya 5 MB se badi hai.")
@@ -70,7 +85,7 @@ def build_campaign_router(automation) -> APIRouter:
                 "rejected_rows": rejected[:100]}
 
     @r.delete("/upload")
-    def remove(ctx: OrgContext = Depends(org_access("training.manage"))):
+    def remove(ctx: OrgContext = Depends(campaign_access)):
         try:
             with automation._lock:
                 remove_upload()
@@ -79,12 +94,10 @@ def build_campaign_router(automation) -> APIRouter:
         return {"ok": True}
 
     @r.post("/start")
-    def start(body: dict, ctx: OrgContext = Depends(org_access("training.manage")), db: Session = Depends(get_db)):
+    def start(body: dict, ctx: OrgContext = Depends(campaign_access), db: Session = Depends(get_db)):
         count = min(max(int(body.get("count", 1)), 1), 5000)
         agent_id = str(body.get("agent_id") or "")
-        row = db.execute(select(Agent, AgentVersion).join(AgentVersion, Agent.published_version_id == AgentVersion.id)
-                         .where(Agent.id == agent_id, Agent.organization_id == ctx.org.id,
-                                Agent.status == "active", AgentVersion.status == "published")).first()
+        row = next(((a, v) for a, v in available_agents(ctx, db) if a.id == agent_id), None)
         if not row or "phone" not in (row[0].channels or []):
             raise HTTPException(422, "Select an active published phone agent.")
         a, v = row
@@ -109,11 +122,11 @@ def build_campaign_router(automation) -> APIRouter:
         return result
 
     @r.post("/stop")
-    def stop(ctx: OrgContext = Depends(org_access("training.manage"))):
+    def stop(ctx: OrgContext = Depends(campaign_access)):
         return automation.stop()
 
     @r.post("/resume")
-    def resume(ctx: OrgContext = Depends(org_access("training.manage"))):
+    def resume(ctx: OrgContext = Depends(campaign_access)):
         return automation.resume()
 
     return r
