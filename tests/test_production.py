@@ -580,12 +580,15 @@ def test_safe_cell(value, expected):
 
 # ---------- readiness ----------
 def test_readiness_endpoints(ti):
+    from alembic.script import ScriptDirectory
+    from app.migrate import alembic_config
+
     c = ti.browser().c
     r = c.get("/readyz")
     assert r.status_code == 200 and r.json() == {"ok": True, "database": "ok", "schema_up_to_date": True}
     assert c.get("/admin/readiness").status_code == 401
     d = c.get("/admin/readiness", headers={"Authorization": "Bearer adm"}).json()
-    assert d["schema"]["current"] == d["schema"]["head"] == "0011_trainee_training_variables"
+    assert d["schema"]["current"] == d["schema"]["head"] == ScriptDirectory.from_config(alembic_config()).get_current_head()
     assert "queues" in d and "features" in d
     text = json.dumps(d)
     for secret in ("adm", "hook", SECRET):

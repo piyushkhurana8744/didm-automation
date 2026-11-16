@@ -61,6 +61,7 @@ class Batch(Base):
     provider_app_version = Column(Integer, nullable=True)
     connection_id = Column(String(200), nullable=True)
     agent_phone = Column(String(30), nullable=True)
+    dry_run = Column(Boolean, nullable=True)  # legacy batches inherit the process setting
 
 
 class ImportedLead(Base):

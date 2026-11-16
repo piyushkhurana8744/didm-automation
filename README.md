@@ -67,11 +67,52 @@ It starts in **test mode** (DRY_RUN=true). In test mode it reads the sheet but m
 - **Change limits:** in Render Environment, change `DAILY_CALL_CAP`, `MAX_PARALLEL_CALLS`, `CALLING_START_HOUR` or `CALLING_END_HOUR`.
 - **New Ananya version:** change `SARVAM_APP_VERSION`.
 
+### Excel / CSV calling and recordings
+
+In `/app/calling-campaign/`, upload the file, select the published phone agent and choose
+**Live · call these leads** to place real calls. **Test** simulates the queue without calling,
+consuming the real daily allowance, or marking uploaded leads as called. Older simulated
+leads are also available for a real call without reuploading. Each batch saves its selected
+mode and keeps it after a restart; other calling flows still use the `DRY_RUN` default.
+
+After a real call, open **Previous calls, transcripts & recordings → Listen / download**.
+The backend fetches the audio from Sarvam using the agent pinned to that batch. Audio is
+available to authorized members of that organization; API credentials stay on the server.
+This accesses the recording retained by Sarvam and does not create an independent archive
+in S3 or Cloudinary. Test calls have no audio. Unanswered calls and recordings still being
+processed may also have no audio. See the [Sarvam recording API](https://docs.sarvam.ai/voice-agents/api/analytics/recordings).
+
+`PUBLIC_BASE_URL` must point to the currently running backend over public HTTPS so Sarvam
+can deliver the result and the queue can proceed. An expired temporary tunnel causes calls
+to remain pending until the watchdog times them out. Update the URL and restart the backend
+when a tunnel changes. Apply migrations (`python -m app.migrate`) before deploying this change.
+
 ## For a developer
 - Python 3.12, FastAPI, SQLAlchemy (Postgres on Render, SQLite locally), Alembic migrations, APScheduler. Web app: Next.js + TypeScript in `frontend/`, served at `/app`.
 - Architecture, database schema, login and permission rules, migrations, environment and deployment notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Browser voice research: [docs/browser_voice_feasibility.md](docs/browser_voice_feasibility.md).
 - Run the tests with `pip install -r requirements-dev.txt && pytest` (set `TEST_POSTGRES_URL` to run them on PostgreSQL). Web app: `cd frontend && npm ci && npm run typecheck && npm run build`.
-- Run locally with `cp .env.example .env`, fill it in, then `uvicorn app.server:app --reload`. The repository `.env` loads automatically and process variables win. Set `DIDM_LOAD_DOTENV=false` to opt out. When `.env` points at an external database, a safe local SQLite launch is `DATABASE_URL=sqlite:///./didm.db MIGRATE_ON_START=false COOKIE_SECURE=false uvicorn app.server:app --reload`.
+- Run locally with `cp .env.example .env`, fill it in, run `python -m app.migrate`, then `COOKIE_SECURE=false uvicorn app.server:app --reload`. Run the migration command again after pulling updates when `MIGRATE_ON_START=false`. The repository `.env` loads automatically and process variables win. Set `DIDM_LOAD_DOTENV=false` to opt out. When `.env` points at an external database, a safe local SQLite launch is `DATABASE_URL=sqlite:///./didm.db MIGRATE_ON_START=false COOKIE_SECURE=false uvicorn app.server:app --reload`.
 - Sarvam result webhook: `POST /webhooks/sarvam/{WEBHOOK_SECRET}`. Every delivery is stored first and retried if processing fails; see `GET /admin/webhook-events`. Admin endpoints need `Authorization: Bearer ADMIN_TOKEN`.
 - Keep one worker only. The batch lock, scheduler, webhook worker and rate limits live in the process.
 # didm-automation
+
+Campaign results normally arrive through the Sarvam webhook. A background fallback now
+checks recent real attempts every 60 seconds and recovers only results with a confirmed
+end time. Missing transcripts are retried separately. Provider rate-limit backoff is
+respected; the analytics API itself caches results for 60 seconds, so fallback recovery
+is not instantaneous. Keep the public webhook URL reachable for the fastest updates.
+The campaign screen refreshes every 2 seconds while a call is pending and shows loading,
+last-update time and retry errors for queue actions and recording retrieval.
+
+For parallel Excel campaigns, set **Leads in this batch** (for example 10) and
+**Calls at the same time** (up to 10). The choice is saved per batch; existing
+batches retain their previous concurrency. Each finished call frees one slot, and
+Stop prevents new calls while current calls finish. Actual capacity depends on
+the Sarvam account and phone connection. Daily caps and retry rules still apply.
+
+Recordings default to **Both voices**, a mono mix so both original stereo channels
+are audible through either speaker or earbud. **Student only** and **Agent only**
+isolate the left and right channels respectively; **Original stereo** preserves
+the provider file. Downloads follow the selected mode. If the source is mono,
+individual speakers cannot be separated. Mixing cannot recover speech absent
+from the provider recording.

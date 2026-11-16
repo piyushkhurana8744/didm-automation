@@ -86,6 +86,9 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
     intelligence = IntelligenceEngine(s, training=training, evaluator=evaluator, transcript_provider=analytics,
                                       recordings=recordings, attempts_provider=analytics)
     training.intelligence = intelligence
+    from .saas.campaign_sync import CampaignSync
+    campaign_sync = (CampaignSync(auto, providers.SarvamAnalytics(s))
+                     if s.sarvam_api_key and s.sarvam_org_id and s.sarvam_workspace_id else None)
     scheduler = None
 
     @asynccontextmanager
@@ -95,6 +98,9 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
             from apscheduler.schedulers.background import BackgroundScheduler
             scheduler = BackgroundScheduler(timezone=s.timezone)
             scheduler.add_job(auto.check_stuck_calls, "interval", minutes=5, id="stuck")
+            if campaign_sync:
+                scheduler.add_job(campaign_sync.run, "interval", seconds=60, id="campaign_results",
+                                  max_instances=1, coalesce=True)
             # Recover an existing batch after restart or a failed webhook follow-up,
             # even when automatic creation of new batches is disabled.
             scheduler.add_job(auto.fill_slots, "interval", seconds=30, id="campaign_queue",
@@ -125,6 +131,8 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
     app.state.training = training
     app.state.intelligence = intelligence
     app.state.recordings = recordings
+    from .saas.campaign_recordings import CampaignRecordings
+    app.state.campaign_recordings = CampaignRecordings(s)
 
     def require_admin(request: Request, authorization: str = Header(default=""), token: str = Query(default="")):
         # Legacy shared admin token. The ?token= form stays for the existing dashboard links; the new
@@ -275,6 +283,8 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
         with SessionLocal() as session:
             call = session.scalars(select(CallAttempt).where(CallAttempt.sheet_row == req.row,
                                                             CallAttempt.state == "calling")).first()
+            if call and not call.dry_run:
+                raise HTTPException(status_code=409, detail="A live call result cannot be simulated.")
         payload = {"attempt_id": call.attempt_id if call else f"sim-{req.row}", "status": req.status,
                    "duration": 60, "final_agent_variables": {"disposition": req.disposition,
                                                              "call_summary": req.summary},

@@ -32,3 +32,45 @@ def test_browser_only_assignment_does_not_allow_excel_calling(world):
     agent, _ = publish_agent(a, channels=["browser"])
     assert assign(a, a.owner, [agent], [a.user_id("trainee@alpha.in")]).status_code == 201
     assert a.trainee.get(f"{a.base}/calling-campaign").status_code == 403
+
+
+def test_campaign_mode_is_explicit_and_persisted(world):
+    from datetime import datetime
+    from app.db import Batch, CallAttempt, SessionLocal
+    from app.excel_leads import DatabaseLeadSheet
+    from sqlalchemy import select
+    from app.integrations import Sarvam
+    import httpx
+
+    a = world.a
+    agent, _ = publish_agent(a, schema=[])
+    auto = world.app.state.automation
+    auto.sheet = DatabaseLeadSheet()
+    auto._clock = lambda: datetime(2026, 11, 16, 11, 0)
+    for key, value in {"sarvam_api_key": "key", "sarvam_org_id": "org", "sarvam_workspace_id": "ws",
+                       "sarvam_connection_id": "conn", "sarvam_agent_phone": "+917965853567",
+                       "whatsapp_enabled": False}.items():
+        setattr(auto.s, key, value)
+    sent = []
+    def respond(request):
+        sent.append(request)
+        return httpx.Response(200, json={"attempt_id": "live-attempt"})
+    auto.sarvam = Sarvam(auto.s, client=httpx.Client(transport=httpx.MockTransport(respond)))
+    base = f"{a.base}/calling-campaign"
+    uploaded = a.owner.post(base + "/upload", content=b"name,phone\nRiya,9876543210\n",
+                            headers={"X-Upload-Filename": "leads.csv"}).json()
+    body = {"agent_id": agent, "upload_id": uploaded["upload_id"], "count": 1}
+    simulated = a.owner.post(base + "/start", {**body, "mode": "test"})
+    assert simulated.status_code == 200, simulated.text
+    assert simulated.json()["dry_run"] and not sent
+    assert a.owner.get(base).json()["queue"]["ready"] == 1
+    live = a.owner.post(base + "/start", {**body, "mode": "live"})
+    assert live.status_code == 200, live.text
+    assert not live.json()["dry_run"] and len(sent) == 1
+    assert auto.s.dry_run is True  # global default remains unchanged
+    with SessionLocal() as db:
+        assert db.get(Batch, live.json()["batch_id"]).dry_run is False
+        assert db.scalars(select(CallAttempt).where(CallAttempt.attempt_id == "live-attempt")).one().dry_run is False
+    assert a.owner.post(base + "/start", {**body, "mode": "invalid"}).status_code == 422
+    for invalid in (0, 11):
+        assert a.owner.post(base + "/start", {**body, "parallel_calls": invalid}).status_code == 422

@@ -144,7 +144,18 @@ async function request<T>(method: Method, path: string, body?: unknown, opts: Re
   return payload as T;
 }
 
+async function blob(path: string): Promise<Blob> {
+  const res = await fetch(`${API_PREFIX}${path}`, { credentials: 'same-origin', cache: 'no-store' });
+  if (!res.ok) {
+    if (res.status === 401) redirectToLogin();
+    const payload = await res.json().catch(() => null);
+    throw new ApiError(res.status, detailFrom(payload, res.status));
+  }
+  return res.blob();
+}
+
 export const api = {
+  blob,
   get: <T>(path: string, opts?: RequestOptions) => request<T>('GET', path, undefined, opts),
   post: <T>(path: string, body?: unknown, opts?: RequestOptions) => request<T>('POST', path, body ?? {}, opts),
   patch: <T>(path: string, body?: unknown, opts?: RequestOptions) => request<T>('PATCH', path, body ?? {}, opts),
@@ -161,9 +172,7 @@ export const api = {
     return payload as T;
   },
   download: async (path: string, filename: string): Promise<void> => {
-    const res = await fetch(`${API_PREFIX}${path}`, { credentials: 'same-origin' });
-    if (!res.ok) throw new ApiError(res.status, fallbackMessage(res.status));
-    const url = URL.createObjectURL(await res.blob());
+    const url = URL.createObjectURL(await blob(path));
     const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
   },
 };

@@ -184,8 +184,8 @@ class DatabaseLeadSheet:
             if upload_id:
                 rows = session.scalars(select(ImportedLead).where(ImportedLead.upload_id == upload_id)
                                        .order_by(ImportedLead.sheet_row)).all()
-                return [(r.sheet_row, [r.data.get(k, "") for k, _ in sorted(COL.items(), key=lambda x: x[1])])
-                        for r in rows]
+                data = _effective_rows(session, rows)
+                return [(r.sheet_row, [data[r.id].get(k, "") for k in COL]) for r in rows]
         return self.fallback.read_rows() if self.fallback else []
 
     def update_row(self, row, updates):
@@ -212,34 +212,56 @@ def _flag(session, key, value):
         session.add(Setting(key=key, value=value))
 
 
+def _effective_rows(session, rows):
+    """Old simulations must not consume a lead's real call or retry allowance."""
+    ids = [r.data.get("attempt_id") for r in rows if r.data.get("attempt_id")]
+    simulated = set(session.scalars(select(CallAttempt.attempt_id).where(
+        CallAttempt.attempt_id.in_(ids), CallAttempt.dry_run.is_(True)))) if ids else set()
+    return {r.id: ({**r.data, "status": "", "called_at": "", "attempts": "0", "outcome": ""}
+                   if r.data.get("attempt_id") in simulated else r.data) for r in rows}
+
+
 def queue_details(session, automation=None):
     from datetime import timedelta
-    from .leads import Lead, blocked_numbers, is_eligible
+    from .leads import Lead, blocked_numbers, is_eligible, parse_called_at
 
     upload_id = get_flag(session, "active_excel_upload", "")
     if not upload_id:
         return None
     rows = session.scalars(select(ImportedLead).where(ImportedLead.upload_id == upload_id)
                            .order_by(ImportedLead.sheet_row)).all()
-    ids = [r.data.get("attempt_id") for r in rows if r.data.get("attempt_id")]
-    calls = {c.attempt_id: c for c in session.scalars(select(CallAttempt).where(
-        CallAttempt.attempt_id.in_(ids)))} if ids else {}
-    leads = [Lead.from_row(r.sheet_row, [r.data.get(k, "") for k in COL]) for r in rows]
+    # Match the upload and row, even while the provider POST has not returned an
+    # attempt_id yet. A filename or phone alone must never attach an older call.
+    batch_ids = [int(key.removeprefix("batch_upload_")) for key in session.scalars(
+        select(Setting.key).where(Setting.key.like("batch_upload_%"), Setting.value == upload_id))
+        if key.removeprefix("batch_upload_").isdigit()]
+    calls = {}
+    if batch_ids:
+        for call in session.scalars(select(CallAttempt).where(CallAttempt.batch_id.in_(batch_ids))
+                                   .order_by(CallAttempt.id)):
+            calls[(call.sheet_row, to_e164(call.phone))] = call
+    data = _effective_rows(session, rows)
+    leads = [Lead.from_row(r.sheet_row, [data[r.id].get(k, "") for k in COL]) for r in rows]
     blocked = blocked_numbers(leads)
     entries = []
     counts = {key: 0 for key in ("waiting", "calling", "completed", "failed", "test", "unavailable")}
     for row, lead in zip(rows, leads):
-        call = calls.get(row.data.get("attempt_id"))
+        call = calls.get((row.sheet_row, to_e164(lead.phone)))
         eligible = (is_eligible(lead, automation.now_local(), blocked, automation.s.max_attempts,
                                timedelta(minutes=automation.s.retry_gap_minutes)) if automation else not lead.status)
-        state, label = "unavailable", "Not ready · previous status needs review"
+        state, label = "unavailable", "Status unavailable for this upload"
+        detail = (call.error or call.summary or "") if call else ""
         if call:
             if call.dry_run:
                 state, label = "test", "Test only · no real call placed"
             elif call.state == "calling":
-                state, label = "calling", "Call requested · waiting for provider result"
+                eligible = False
+                state, label = "calling", ("Request accepted · waiting for provider result" if call.attempt_id
+                                            else "Sending call request · ringing not confirmed")
             elif call.state == "done":
-                state, label = "completed", {"connected": "Connected · call ended", "no_answer": "No answer", "busy": "Number busy"}.get(call.status, "Call ended · " + (call.status or "unknown result"))
+                state, label = "completed", {"connected": "Connected · call ended", "no_answer": "Provider reported no answer", "busy": "Provider reported busy · not connected"}.get(call.status, "Call ended · " + (call.status or "unknown result"))
+                if call.status == "busy":
+                    detail = detail or "Sarvam returned busy for this attempt. This does not confirm that your phone rang; no detailed reason was received."
             elif call.state in ("start_failed", "stuck"):
                 state, label = "failed", "Could not start" if call.state == "start_failed" else "Result not received"
             else:
@@ -248,10 +270,18 @@ def queue_details(session, automation=None):
             state, label = "waiting", "Waiting · not called yet"
         if eligible:
             label = "Ready to call" if not call else label + " · retry ready"
+        elif call and call.state in ("done", "start_failed", "stuck") and automation:
+            if lead.attempts >= automation.s.max_attempts:
+                detail = (detail + " Maximum attempts reached for this upload.").strip()
+            elif lead.status.startswith("Done:") and lead.status != "Done: connected":
+                last = parse_called_at(lead.called_at)
+                retry_at = last + timedelta(minutes=automation.s.retry_gap_minutes) if last else None
+                if retry_at and retry_at > automation.now_local():
+                    detail = (detail + f" Retry available at {retry_at:%d %b %H:%M} ({automation.s.timezone}).").strip()
         counts[state] += 1
         entries.append({"row": row.sheet_row, "name": lead.name, "phone": lead.phone,
                         "state": state, "status": label, "eligible": bool(eligible),
-                        "detail": (call.error or call.summary or "") if call else "",
+                        "detail": detail, "call_id": call.id if call else None,
                         "transcript": bool(call and call.raw_result and (call.raw_result.get("transcript") or call.raw_result.get("interaction_transcript")))})
     ready = [entry for entry in entries if entry["eligible"]]
     return {"id": upload_id, "filename": get_flag(session, "excel_filename", "Earlier Excel · filename not recorded"),

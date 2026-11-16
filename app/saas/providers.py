@@ -81,7 +81,8 @@ class SarvamAnalytics:
         return {"status": str(it.get("connectivity_status") or "unknown").lower(),
                 "duration": it.get("duration_in_seconds"), "attempt_id": it.get("attempt_id"),
                 "interaction_id": it.get("interaction_id"), "failure_reason": it.get("failure_reason"),
-                "ended_by": it.get("ended_by")}
+                "ended_by": it.get("ended_by"), "end_datetime": it.get("end_datetime"),
+                "final_agent_variables": it.get("agent_variables") or {}}
 
     def fetch(self, sess):
         """The English transcript of the session's interaction as [{role, en_text}], the same shape the

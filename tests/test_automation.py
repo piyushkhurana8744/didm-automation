@@ -17,6 +17,122 @@ from tests.conftest import fresh_db_url
 NOW = datetime(2026, 10, 16, 11, 0)
 
 
+def test_current_upload_shows_request_before_provider_returns_id(env):
+    from app.excel_leads import DatabaseLeadSheet, save_upload, queue_details
+    _, auto, _, sarvam, *_ = env([], whatsapp_enabled=False)
+    auto.sheet = DatabaseLeadSheet()
+    save_upload([{"name": "A", "phone": "9000000001", "call": "YES"}])
+    original = sarvam.start_call
+    def start(*args, **kwargs):
+        with SessionLocal() as db:
+            lead = queue_details(db, auto)["leads"][0]
+            assert lead["state"] == "calling"
+            assert "Sending call request" in lead["status"]
+            assert not lead["eligible"]
+            assert lead["call_id"] is not None
+        return original(*args, **kwargs)
+    sarvam.start_call = start
+    auto.start_batch(1)
+
+
+def test_new_upload_same_filename_and_phone_does_not_inherit_old_call(env):
+    from app.excel_leads import DatabaseLeadSheet, save_upload, queue_details
+    _, auto, _, _, *_ = env([], whatsapp_enabled=False)
+    auto.sheet = DatabaseLeadSheet()
+    data = [{"name": "A", "phone": "9000000001", "call": "YES"}]
+    first = save_upload(data, "same.csv")
+    auto.start_batch(1)
+    auto.handle_result(result("att-1", 2))
+    second = save_upload(data, "same.csv")
+    assert first != second
+    with SessionLocal() as db:
+        lead = queue_details(db, auto)["leads"][0]
+        assert lead["eligible"] and lead["state"] == "waiting" and lead["call_id"] is None
+    auto.start_batch(1)
+    auto.handle_result(result("att-1", 2))  # late old delivery must not change new row
+    with SessionLocal() as db:
+        lead = queue_details(db, auto)["leads"][0]
+        assert lead["state"] == "calling" and not lead["eligible"]
+    auto.handle_result(result("att-2", 2, status="busy"))
+    with SessionLocal() as db:
+        lead = queue_details(db, auto)["leads"][0]
+        assert lead["status"] == "Provider reported busy · not connected"
+        assert "Retry available" in lead["detail"]
+
+
+def test_excel_ten_parallel_calls_refill_stop_and_persist(env):
+    from app.excel_leads import DatabaseLeadSheet, save_upload
+    from app.db import get_flag
+    _, auto, _, sarvam, *_ = env([], whatsapp_enabled=False)
+    auto.sheet = DatabaseLeadSheet()
+    save_upload([{"name": str(i), "phone": f"90000000{i:02d}", "call": "YES"} for i in range(13)])
+    started = auto.start_batch(13, parallel_calls=10)
+    assert started["dialled_now"] == 10 and len(sarvam.calls) == 10
+    with SessionLocal() as db:
+        assert get_flag(db, f"batch_parallel_{started['batch_id']}") == "10"
+        assert auto._in_flight(db) == 10
+    auto.handle_result(result("att-1", 2))
+    assert len(sarvam.calls) == 11
+    auto.handle_result(result("att-1", 2))
+    assert len(sarvam.calls) == 11
+    assert len({c[0] for c in sarvam.calls}) == 11
+    auto.stop()
+    auto.handle_result(result("att-2", 3))
+    assert len(sarvam.calls) == 11
+
+
+def test_parallel_batch_respects_requested_size_and_daily_cap(env):
+    from app.excel_leads import DatabaseLeadSheet, save_upload
+    _, auto, _, sarvam, *_ = env([], whatsapp_enabled=False, daily_call_cap=3)
+    auto.sheet = DatabaseLeadSheet()
+    save_upload([{"name": str(i), "phone": f"90000000{i:02d}", "call": "YES"} for i in range(12)])
+    assert not auto.start_batch(10, parallel_calls=11)["ok"]
+    assert auto.start_batch(2, parallel_calls=10)["dialled_now"] == 2
+    auto.handle_result(result("att-1", 2)); auto.handle_result(result("att-2", 3))
+    assert len(sarvam.calls) == 2
+    assert auto.start_batch(10, parallel_calls=10)["dialled_now"] == 1
+    assert len(sarvam.calls) == 3
+
+
+def test_excel_simulation_finishes_and_preserves_live_queue_and_daily_cap(env):
+    from app.excel_leads import DatabaseLeadSheet, save_upload, queue_details
+
+    _, auto, _, sarvam, *_ = env([], dry_run=True, daily_call_cap=1, whatsapp_enabled=False)
+    auto.sheet = DatabaseLeadSheet()
+    save_upload([{"name": "A", "phone": "9000000001", "call": "YES"},
+                 {"name": "B", "phone": "9000000002", "call": "YES"}])
+    simulated = auto.start_batch(2, dry_run=True)
+    assert simulated["dialled_now"] == 2 and simulated["dry_run"]
+    assert sarvam.calls == []
+    with SessionLocal() as db:
+        assert queue_details(db, auto)["ready"] == 2
+        assert not db.get(Batch, simulated["batch_id"]).active
+        assert all(c.state == "done" and c.dry_run for c in db.scalars(select(CallAttempt)))
+        assert auto.calls_today(db) == 0
+    live = auto.start_batch(2, dry_run=False)
+    assert live["dialled_now"] == 1 and not live["dry_run"]
+    assert len(sarvam.calls) == 1
+    # Persisted live mode must win after process configuration changes too.
+    with SessionLocal() as db:
+        assert db.get(Batch, live["batch_id"]).dry_run is False
+        assert db.scalars(select(CallAttempt).where(CallAttempt.attempt_id == "att-1")).one().dry_run is False
+
+
+def test_legacy_simulated_leads_can_be_called_live_without_reupload(env):
+    from app.excel_leads import DatabaseLeadSheet, save_upload, queue_details
+
+    _, auto, _, sarvam, *_ = env([], whatsapp_enabled=False)
+    auto.sheet = DatabaseLeadSheet()
+    save_upload([{"name": "A", "phone": "9000000001", "call": "YES",
+                  "status": "HTTP 200", "attempt_id": "old-test", "attempts": "1"}])
+    with SessionLocal() as db:
+        db.add(CallAttempt(attempt_id="old-test", sheet_row=2, dry_run=True, state="stopped"))
+        db.commit()
+        assert queue_details(db, auto)["ready"] == 1
+    assert auto.start_batch(1, dry_run=False)["dialled_now"] == 1
+    assert len(sarvam.calls) == 1
+
+
 def test_excel_campaign_is_sequential_and_keeps_late_transcript(env):
     from app.excel_leads import DatabaseLeadSheet, save_upload
     from app.main import _transcript_text

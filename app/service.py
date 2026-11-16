@@ -45,7 +45,7 @@ class Automation:
 
     def calls_today(self, session) -> int:
         return session.scalar(select(func.count(CallAttempt.id)).where(
-            CallAttempt.started_at >= self._today_start_utc())) or 0
+            CallAttempt.started_at >= self._today_start_utc(), CallAttempt.dry_run.is_(False))) or 0
 
     def is_stopped(self, session) -> bool:
         return get_flag(session, "stopped", "0") == "1"
@@ -66,13 +66,17 @@ class Automation:
 
     # ---------- batches ----------
     def start_batch(self, count: int, min_row: int | None = None, max_row: int | None = None,
-                    agent: dict | None = None) -> dict:
+                    agent: dict | None = None, dry_run: bool | None = None,
+                    parallel_calls: int | None = None) -> dict:
+        dry_run = self.s.dry_run if dry_run is None else dry_run
+        if parallel_calls is not None and not 1 <= parallel_calls <= 10:
+            return {"ok": False, "reason": "Choose between 1 and 10 simultaneous calls."}
         with self._lock, SessionLocal() as session:
             if self.is_stopped(session):
                 return {"ok": False, "reason": "Stopped. Send resume first."}
             if not self.within_calling_hours():
                 return {"ok": False, "reason": f"Outside calling hours ({self.s.calling_start_hour}:00 to {self.s.calling_end_hour}:00)."}
-            if not self.s.dry_run:
+            if not dry_run:
                 excel_queue = getattr(self.sheet, "has_active_import", lambda: False)()
                 # Database-backed Excel campaigns do not need Google Sheets or WhatsApp. They only
                 # need the Sarvam outbound + result-webhook configuration.
@@ -99,15 +103,17 @@ class Automation:
                           provider_app_id=agent.get("app_id") if agent else None,
                           provider_app_version=agent.get("app_version") if agent else None,
                           connection_id=agent.get("connection_id") if agent else None,
-                          agent_phone=agent.get("agent_phone") if agent else None)
+                          agent_phone=agent.get("agent_phone") if agent else None, dry_run=dry_run)
             session.add(batch)
             session.commit()
             batch_id = batch.id
+            if parallel_calls is not None:
+                set_flag(session, f"batch_parallel_{batch_id}", str(parallel_calls))
             if getattr(self.sheet, "has_active_import", lambda: False)():
                 set_flag(session, f"batch_file_{batch_id}", get_flag(session, "excel_filename", "Previously uploaded Excel"))
                 set_flag(session, f"batch_upload_{batch_id}", get_flag(session, "active_excel_upload", ""))
         started = self.fill_slots()
-        return {"ok": True, "batch_id": batch_id, "dialled_now": started, "dry_run": self.s.dry_run}
+        return {"ok": True, "batch_id": batch_id, "dialled_now": started, "dry_run": dry_run}
 
     def auto_dial(self) -> dict:
         """Timer job: keeps calling new leads on its own during calling hours, like Make's schedule."""
@@ -183,10 +189,11 @@ class Automation:
                     close("daily cap reached")
                     self.alert(session, "warn", f"Daily call cap of {self.s.daily_call_cap} reached.")
                     return started
-                # User-uploaded Excel campaigns are deliberately sequential. This protects the
-                # provider quota and the app even if MAX_PARALLEL_CALLS was raised for another flow.
+                # Existing campaigns keep their previous default; new campaigns pin the chosen
+                # concurrency so it survives restarts and never changes an already running batch.
                 excel_queue = getattr(self.sheet, "has_active_import", lambda: False)()
-                slot_limit = 1 if excel_queue else self.s.max_parallel_calls
+                slot_limit = int(get_flag(session, f"batch_parallel_{batch.id}",
+                                          str(1 if excel_queue else self.s.max_parallel_calls)))
                 if self._in_flight(session) >= slot_limit:
                     return started
                 if leads is None:
@@ -227,10 +234,17 @@ class Automation:
     def _dial(self, session, batch: Batch, lead: Lead) -> bool:
         phone = to_e164(lead.phone)
         stamp = self.now_local().strftime("%Y-%m-%d %H:%M")
+        dry_run = self.s.dry_run if batch.dry_run is None else batch.dry_run
         call = CallAttempt(sheet_row=lead.row, phone=phone, name=lead.name, batch_id=batch.id,
-                           dry_run=self.s.dry_run)
+                           dry_run=dry_run)
         session.add(call)
         batch.dialled += 1
+        if dry_run and getattr(self.sheet, "has_active_import", lambda: False)():
+            # Simulations have no provider webhook. Finish now and leave the real lead ready.
+            call.attempt_id = f"dry-{uuid.uuid4()}"
+            call.state, call.status, call.finished_at = "done", "simulated", utcnow()
+            session.commit()
+            return True
         session.commit()
         try:
             self.sheet.update_row(lead.row, {"status": "Calling", "called_at": stamp,
@@ -248,7 +262,7 @@ class Automation:
             "lead_note": lead.note,
         }
         metadata = {"src": "didm-app", "row": str(lead.row), "call_id": str(call.id)}
-        if self.s.dry_run:
+        if dry_run:
             result = {"ok": True, "status_code": 200, "attempt_id": f"dry-{uuid.uuid4()}", "error": None}
         else:
             target = (CallTarget(batch.provider_app_id, batch.provider_app_version, batch.connection_id,
@@ -303,8 +317,14 @@ class Automation:
             if call and call.state == "done":
                 # Providers may deliver the transcript after the initial completion event.
                 # Enrich history without repeating follow-ups or advancing the queue twice.
-                if payload.get("interaction_transcript") or payload.get("transcript"):
-                    call.raw_result = {**(call.raw_result or {}), **payload}
+                if (payload.get("interaction_transcript") or payload.get("transcript")
+                        or payload.get("interaction_id") or fav):
+                    call.raw_result = {**(call.raw_result or {}),
+                                       **{k: v for k, v in payload.items() if v is not None}}
+                    if fav.get("call_summary"):
+                        call.summary = fav["call_summary"]
+                    if fav.get("disposition"):
+                        call.outcome = fav["disposition"]
                     session.commit()
                 return {"ok": True, "duplicate": True}
             if row is None:
@@ -341,7 +361,7 @@ class Automation:
             sheet_ok = self._safe_sheet(session, row, updates)
             if outcome == "callback_requested":
                 self.alert(session, "info", f"Callback requested: row {row} {name} {fav.get('callback_details', '')}")
-            wa = self._whatsapp_followup(session, row, outcome)
+            wa = self._whatsapp_followup(session, row, outcome, dry_run=call.dry_run)
         self.fill_slots()
         return {"ok": True, "sheet_updated": sheet_ok, "whatsapp": wa}
 
@@ -371,7 +391,8 @@ class Automation:
                         .values(state="sent" if ok else "failed", updated_at=utcnow()))
         session.commit()
 
-    def _whatsapp_followup(self, session, row: int, outcome: str) -> str:
+    def _whatsapp_followup(self, session, row: int, outcome: str, dry_run: bool | None = None) -> str:
+        dry_run = self.s.dry_run if dry_run is None else dry_run
         if not self.s.whatsapp_enabled:
             return "disabled"
         if outcome.lower().startswith(BLOCK_OUTCOMES):
@@ -392,7 +413,7 @@ class Automation:
             WhatsAppMessage.phone == e164, WhatsAppMessage.http_status == 200)) or 0
         if already or not self._claim_whatsapp(session, e164, "followup"):
             return "skipped: already sent to this number"
-        if self.s.dry_run:
+        if dry_run:
             res = {"ok": True, "status_code": 200, "error": None}
         else:
             try:
@@ -401,7 +422,7 @@ class Automation:
                 self._finish_claim(session, e164, "followup", False)
                 raise
         session.add(WhatsAppMessage(sheet_row=row, phone=e164, template=self.s.veblika_template,
-                                    http_status=res["status_code"], error=res["error"], dry_run=self.s.dry_run))
+                                    http_status=res["status_code"], error=res["error"], dry_run=dry_run))
         session.commit()
         self._finish_claim(session, e164, "followup", res["ok"])
         stamp = self.now_local().strftime("%Y-%m-%d %H:%M")

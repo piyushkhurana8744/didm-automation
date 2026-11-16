@@ -2,3 +2,4 @@
 *.db
 __pycache__/
 .pytest_cache/
+artifacts/call-recordings/

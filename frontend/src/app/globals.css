@@ -1679,3 +1679,7 @@ fieldset.fieldset {
 .campaign-phone { white-space:nowrap; font-variant-numeric:tabular-nums; }
 .campaign-feedback { border:1px solid var(--primary); border-radius:8px; padding:1rem; margin:1rem 0; }
 .campaign-ui details>summary { cursor:pointer; padding:.4rem 0; font-weight:600; }
+
+.campaign-sync { display:flex; align-items:center; flex-wrap:wrap; gap:.6rem; color:var(--text-muted); margin:1rem 0; }
+.campaign-sync .button { margin-left:auto; }
+.campaign-ui .button .spinner-wrap { margin-right:.4rem; }

@@ -71,6 +71,25 @@ def test_reload_child_process_keeps_safe_database_override():
     assert result.stdout.strip() == "sqlite:///./didm.db False True"
 
 
+def test_migration_command_uses_process_database_override(tmp_path):
+    from app.db import make_engine
+    from app.migrate import schema_status
+
+    url = f"sqlite:///{tmp_path / 'migration-cli.db'}"
+    env = {**os.environ, "DIDM_LOAD_DOTENV": "true", "DATABASE_URL": url}
+    result = subprocess.run(
+        [sys.executable, "-m", "app.migrate"],
+        cwd=Path(__file__).resolve().parent.parent, env=env,
+        text=True, capture_output=True, check=True,
+    )
+    engine = make_engine(url)
+    try:
+        assert schema_status(engine)["up_to_date"] is True
+        assert "'up_to_date': True" in result.stdout
+    finally:
+        engine.dispose()
+
+
 def test_phone_availability_requires_complete_runtime_configuration():
     complete = Settings()
     complete.training_phone_enabled = True

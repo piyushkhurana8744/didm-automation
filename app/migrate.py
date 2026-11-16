@@ -39,10 +39,10 @@ def schema_status(engine) -> dict:
 
 
 if __name__ == "__main__":  # python -m app.migrate: the controlled migration step for deployments
-    import os
-
+    from .config import settings
     from .db import make_engine
 
-    eng = make_engine(os.environ["DATABASE_URL"])
+    # Match the server's repository .env loading and process-variable precedence.
+    eng = make_engine(settings.database_url)
     upgrade_head(eng)
     print(schema_status(eng))
