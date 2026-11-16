@@ -67,7 +67,9 @@ class Settings:
 
     # App access
     admin_token: str = field(default_factory=lambda: _clean_secret("ADMIN_TOKEN", ""))
-    webhook_secret: str = field(default_factory=lambda: _clean_secret("WEBHOOK_SECRET", ""))
+    webhook_secret: str = field(default_factory=lambda: (
+        _clean_secret("WEBHOOK_SECRET", "") or _clean_secret("TRAINING_WEBHOOK_SECRET", "")
+    ))
     public_base_url: str = field(default_factory=lambda: os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/"))
     database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", "sqlite:///./didm.db").strip())
 
