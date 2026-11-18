@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { api, errorMessage } from '@/lib/api';
 import { orgPath } from '@/lib/agents';
 import { useSession } from '@/lib/session';
@@ -61,6 +62,7 @@ export default function CallingCampaignPage(){
  {loading?<><Spinner label="Loading queue, agents and call history…"/><SkeletonRows rows={4}/></>:<div className="campaign-warning" role="alert">{loadError||'Campaign status could not be loaded.'}<button className="button" disabled={refreshing} onClick={()=>load()}>{refreshing?<Spinner label="Retrying…"/>:'Try again'}</button></div>}</div>;
  return <div className="campaign-ui">
  <PageHeader title="Calling campaigns" description="Choose your Excel or CSV file, check the queue, choose a batch size and how many calls to run together."/>
+ <p>For all calls from your linked Sarvam agents, including calls started directly in Sarvam, open <Link href="/outbound-calls/">Outbound calls · transcripts &amp; recordings</Link>.</p>
  <div className="campaign-sync" role="status">{refreshing?<><Spinner inline/>Updating results…</>:updated?`Last updated ${updated}`:''}<button className="button secondary" disabled={refreshing||busy} onClick={()=>load()}>Refresh results</button></div>
  {loadError&&<div className="campaign-warning" role="alert">{loadError} Showing the last received data; retrying automatically.</div>}
  {busy&&<div className="campaign-feedback" role="status"><Spinner label={action}/></div>}

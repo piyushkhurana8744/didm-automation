@@ -90,6 +90,8 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
     campaign_sync = (CampaignSync(auto, providers.SarvamAnalytics(s))
                      if s.sarvam_api_key and s.sarvam_org_id and s.sarvam_workspace_id else None)
     scheduler = None
+    from .saas.outbound import OutboundHistory
+    outbound_history = OutboundHistory(s)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -98,6 +100,9 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
             from apscheduler.schedulers.background import BackgroundScheduler
             scheduler = BackgroundScheduler(timezone=s.timezone)
             scheduler.add_job(auto.check_stuck_calls, "interval", minutes=5, id="stuck")
+            if outbound_history.configured():
+                scheduler.add_job(outbound_history.run, "interval", seconds=60, id="outbound_history",
+                                  max_instances=1, coalesce=True)
             if campaign_sync:
                 scheduler.add_job(campaign_sync.run, "interval", seconds=60, id="campaign_results",
                                   max_instances=1, coalesce=True)
@@ -131,6 +136,7 @@ def create_app(s: Settings | None = None, automation: Automation | None = None, 
     app.state.training = training
     app.state.intelligence = intelligence
     app.state.recordings = recordings
+    app.state.outbound_history = outbound_history
     from .saas.campaign_recordings import CampaignRecordings
     app.state.campaign_recordings = CampaignRecordings(s)
 

@@ -1117,3 +1117,35 @@ for _immutable_model in (KnowledgeDocumentRevision, KnowledgeTextBlock, Knowledg
                          KnowledgeFaqRevision, KnowledgeSnapshot, KnowledgeSnapshotItem):
     event.listen(_immutable_model, "before_update", _block_immutable_knowledge_update)
     event.listen(_immutable_model, "before_delete", _block_immutable_knowledge_delete)
+
+
+class OutboundCall(Base):
+    """Provider history, independent of the local lead queue and its side effects."""
+    __tablename__ = "outbound_calls"
+    __table_args__ = (UniqueConstraint("agent_id", "attempt_id", name="uq_outbound_agent_attempt"),)
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
+    agent_id = Column(String(36), ForeignKey("agents.id"), nullable=False, index=True)
+    attempt_id = Column(String(200), nullable=False)
+    interaction_id = Column(String(200), nullable=True)
+    phone = Column(String(200), nullable=False, default="")
+    status = Column(String(80), nullable=False, default="unknown")
+    duration = Column(Integer, nullable=True)
+    started_at = Column(DateTime, nullable=False, index=True)
+    finished_at = Column(DateTime, nullable=True)
+    campaign_id = Column(String(200), nullable=True)
+    failure_reason = Column(Text, nullable=True)
+    variables = Column(JSON, nullable=False, default=dict)
+    transcript = Column(JSON, nullable=False, default=dict)
+    transcript_retry_at = Column(DateTime, nullable=False, default=utcnow)
+
+
+class OutboundSyncState(Base):
+    __tablename__ = "outbound_sync_states"
+    agent_id = Column(String(36), ForeignKey("agents.id"), primary_key=True)
+    window_start = Column(DateTime, nullable=False)
+    window_end = Column(DateTime, nullable=False)
+    offset = Column(Integer, nullable=False, default=0)
+    last_synced_at = Column(DateTime, nullable=True)
+    retry_at = Column(DateTime, nullable=False, default=utcnow)
+    error = Column(String(200), nullable=True)

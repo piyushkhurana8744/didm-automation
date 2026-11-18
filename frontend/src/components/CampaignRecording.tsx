@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Spinner } from './Spinner';
 import { api, errorMessage } from '@/lib/api';
 
-export function CampaignRecording({ base, call }: {
+export function CampaignRecording({ base, call, callerLabel = 'Student' }: {
   base: string;
+  callerLabel?: string;
   call: { id: number; name: string; dry_run: boolean; state: string };
 }) {
   const [channel, setChannel] = useState('both');
@@ -46,7 +47,7 @@ export function CampaignRecording({ base, call }: {
 
   return <div>
     <label>Listen to <select value={channel} disabled={busy} onChange={e=>{setChannel(e.target.value);setError('');}}>
-      <option value="both">Both voices</option><option value="student">Student only</option>
+      <option value="both">Both voices</option><option value="student">{callerLabel} only</option>
       <option value="agent">Agent only</option><option value="original">Original stereo</option>
     </select></label>
     {url && loadedChannel===channel ? <>
@@ -55,7 +56,7 @@ export function CampaignRecording({ base, call }: {
     </> : <button className="button secondary" disabled={busy} onClick={load}>
       {busy ? <Spinner label="Fetching recording…"/> : error ? 'Retry recording' : 'Load / download audio'}
     </button>}
-    <small>Both voices plays the two channels together. Student only isolates the quieter side; it cannot recover speech missing from the source.</small>
+    <small>Both voices plays the two channels together. {callerLabel} only isolates the caller channel; it cannot recover speech missing from the source.</small>
     {error && <p role="status">{error}</p>}
   </div>;
 }

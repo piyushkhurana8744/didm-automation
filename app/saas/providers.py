@@ -84,6 +84,32 @@ class SarvamAnalytics:
                 "ended_by": it.get("ended_by"), "end_datetime": it.get("end_datetime"),
                 "final_agent_variables": it.get("agent_variables") or {}}
 
+    def list_outbound(self, app_id, start, end, offset=0):
+        """One fixed-window page, including calls placed outside this application."""
+        resp = self._get(app_id, "attempts", {
+            "start_datetime": _iso(start), "end_datetime": _iso(end),
+            "limit": 100, "offset": offset, "sort_by": "effective_datetime", "sort_order": "asc",
+            "filter_conditions": json.dumps([
+                {"field": "channel_direction", "operator": "equals", "value": "outbound"}])})
+        if resp.status_code != 200:
+            raise JobRetry("provider_rejected", f"Sarvam answered {resp.status_code}")
+        return resp.json()
+
+    def conversation(self, sess):
+        params = {**self._window(sess), "limit": 5, "include_transcript": "true",
+                  "filter_conditions": json.dumps([{"field": "interaction_id", "operator": "equals",
+                                                    "value": str(sess.provider_session_id)}])}
+        resp = self._get(sess.provider_app_id, "interactions", params)
+        if resp.status_code != 200:
+            raise JobRetry("provider_rejected", f"Sarvam answered {resp.status_code}")
+        for item in resp.json().get("items") or []:
+            if str(item.get("interaction_id")) == str(sess.provider_session_id):
+                original = item.get("original_transcript") or []
+                english = item.get("translate_transcript") or []
+                if original or english:
+                    return {"original": original, "english": english}
+        raise JobRetry("transcript_not_ready", "Transcript is still being prepared.")
+
     def fetch(self, sess):
         """The English transcript of the session's interaction as [{role, en_text}], the same shape the
         webhook sends. Uses List interactions with include_transcript=true and reads translate_transcript
